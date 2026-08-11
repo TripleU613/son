@@ -21,9 +21,9 @@ pub fn Privacy() -> impl IntoView {
         />
         <Link rel="canonical" href=absolute("/privacy")/>
 
-        <article class="legal">
-            <h1>"privacy policy"</h1>
-            <p class="legal-updated">"Last updated: this is a draft, not yet dated for a public launch."</p>
+        <article class="max-w-[70ch] pt-5 [&_h2]:mb-2 [&_h2]:mt-7 [&_h2]:text-[1.2rem] [&_h2]:font-semibold [&_li]:my-1 [&_li]:leading-relaxed [&_li]:text-ink-2 [&_p]:leading-relaxed [&_p]:text-ink-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+            <h1 class="m-0 mb-1.5 text-[2rem] font-bold tracking-tight">"Privacy"</h1>
+            <p class="m-0 mb-6 text-[0.85rem] italic text-ink-3">"Last updated: this is a draft, not yet dated for a public launch."</p>
 
             <p>
                 "This is a plain-language description of what son collection actually does with data. \
@@ -96,9 +96,9 @@ pub fn Terms() -> impl IntoView {
         <Meta name="description" content="The rules for using and contributing to son collection."/>
         <Link rel="canonical" href=absolute("/tos")/>
 
-        <article class="legal">
-            <h1>"terms of service"</h1>
-            <p class="legal-updated">"Last updated: this is a draft, not yet dated for a public launch."</p>
+        <article class="max-w-[70ch] pt-5 [&_h2]:mb-2 [&_h2]:mt-7 [&_h2]:text-[1.2rem] [&_h2]:font-semibold [&_li]:my-1 [&_li]:leading-relaxed [&_li]:text-ink-2 [&_p]:leading-relaxed [&_p]:text-ink-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+            <h1 class="m-0 mb-1.5 text-[2rem] font-bold tracking-tight">"Terms"</h1>
+            <p class="m-0 mb-6 text-[0.85rem] italic text-ink-3">"Last updated: this is a draft, not yet dated for a public launch."</p>
 
             <p>"By using son collection, you agree to these terms. They're written in plain language on purpose."</p>
 

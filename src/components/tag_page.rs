@@ -5,6 +5,8 @@ use leptos_router::hooks::use_params_map;
 use crate::api::sons_by_tag;
 use crate::components::card::SonCard;
 use crate::components::density::{Density, DensityToggle, GridSkeleton};
+use crate::components::empty::{EmptyState, ErrorState};
+use crate::components::icon::LuImage;
 use crate::components::infinite_scroll::ScrollSentinel;
 use crate::models::Son;
 use crate::seo::absolute;
@@ -45,7 +47,11 @@ pub fn TagPage() -> impl IntoView {
         let s = slug();
         let from = cursor.get_untracked();
         async move {
-            match sons_by_tag(s, from).await {
+            // See gallery.rs: fetching with a None cursor re-requests page ONE
+            // and appends it, duplicating every card. Guarded inside the future
+            // because Action's closure must return one.
+            let Some(from) = from else { return };
+            match sons_by_tag(s, Some(from)).await {
                 Ok(page) => {
                     let end = page.next_cursor.is_none();
                     set_extra.update(|v| v.extend(page.sons));
@@ -70,11 +76,9 @@ pub fn TagPage() -> impl IntoView {
         // a fresh SSR response per URL rather than navigating client-side.
         <Link rel="canonical" href=absolute(&format!("/tag/{}", slug()))/>
 
-        <section class="hero">
-            <h1>"#" {slug}</h1>
-        </section>
+        <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"#" {slug}</h1>
 
-        <div class="sortbar">
+        <div class="flex min-w-0 items-center gap-3 pb-4">
             <DensityToggle density=density set_density=set_density/>
         </div>
 
@@ -83,13 +87,18 @@ pub fn TagPage() -> impl IntoView {
                 first
                     .get()
                     .map(|res| match res {
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        Err(_) => {
+                            view! { <ErrorState message="Something went wrong."/> }.into_any()
+                        }
                         Ok(page) => {
                             if page.sons.is_empty() {
                                 return view! {
-                                    <section class="empty">
-                                        <h2>"Nothing tagged like this yet."</h2>
-                                    </section>
+                                    <EmptyState
+                                        icon=LuImage
+                                        message="Nothing tagged like this yet."
+                                        action_href="/"
+                                        action_label="Browse all"
+                                    />
                                 }
                                     .into_any();
                             }
@@ -110,10 +119,10 @@ pub fn TagPage() -> impl IntoView {
             }}
         </Suspense>
 
-        <div class="more">
+        <div class="py-8 text-center">
             <Show
                 when=move || !exhausted.get()
-                fallback=|| view! { <p class="exhausted">"That's every son with this tag."</p> }
+                fallback=|| ()
             >
                 <ScrollSentinel on_visible=move || {
                     if !loading.get_untracked() {
@@ -127,7 +136,7 @@ pub fn TagPage() -> impl IntoView {
                         load_more.dispatch(());
                     }
                 >
-                    {move || if loading.get() { "loading…" } else { "more sons" }}
+                    {move || if loading.get() { "Loading…" } else { "More" }}
                 </button>
             </Show>
         </div>

@@ -25,9 +25,9 @@ pub fn SonCard(son: Son) -> impl IntoView {
     let tag_chips = (!son.tags.is_empty()).then(|| {
         let tags = son.tags.clone();
         view! {
-            <div class="card-tags">
+            <div class="flex flex-wrap gap-1.5">
                 <For each=move || tags.clone() key=|t| t.slug.clone() let:tag>
-                    <A href=format!("/tag/{}", tag.slug) attr:class="tag-chip">
+                    <A href=format!("/tag/{}", tag.slug) attr:class="chip px-2.5 py-0.5 text-[0.7rem]">
                         {tag.name.clone()}
                     </A>
                 </For>
@@ -41,17 +41,18 @@ pub fn SonCard(son: Son) -> impl IntoView {
         // (and browsers resolve the click ambiguously). The image/title
         // block is its own anchor instead.
         <div class="card">
-            <A href=href attr:class="card-link">
-                <div class="card-frame" style=format!("--son-ratio: {ratio}")>
+            <A href=href attr:class="flex flex-none flex-col text-inherit no-underline">
+                <div class="card-frame relative aspect-[4/5] w-full flex-none overflow-hidden bg-surface-raised" style=format!("--son-ratio: {ratio}")>
                     <img
                         src=son.thumb_url.clone()
                         alt=son.title.clone()
                         loading="lazy"
                         decoding="async"
+                        class="absolute inset-0 block h-full w-full object-cover"
                     />
                 </div>
-                <div class="card-meta">
-                    <span class="card-title">{son.title.clone()}</span>
+                <div class="flex items-center justify-between gap-2 px-2.5 pb-1.5 pt-2 text-[0.8rem] sm:gap-2.5 sm:px-3 sm:py-2.5">
+                    <span class="overflow-hidden text-ellipsis whitespace-nowrap">{son.title.clone()}</span>
                     <LikeButton
                         id=son.id.clone()
                         initial_count=son.likes
@@ -60,8 +61,8 @@ pub fn SonCard(son: Son) -> impl IntoView {
                     />
                 </div>
             </A>
-            <div class="card-foot">
-                <span class="card-by">
+            <div class="mt-auto flex flex-col gap-1.5 px-2.5 pb-2.5 sm:px-3 sm:pb-3">
+                <span class="text-[0.78rem] text-ink-3">
                     {match &son.uploader {
                         Some(u) => format!("by {}", u.display_name),
                         None => "anonymous".to_string(),

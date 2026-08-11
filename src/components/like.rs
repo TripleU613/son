@@ -60,11 +60,30 @@ pub fn LikeButton(
         });
     };
 
+    // One reactive class string rather than five `class:` toggles. Toggling
+    // individual utilities means the base class and the toggled one are both
+    // present and equal-specificity, so which wins depends on their order in
+    // the generated stylesheet -- the exact cascade coin-flip this migration
+    // exists to remove. Swapping whole sets keeps one padding and one colour
+    // in play at a time. Every literal below is visible to the Tailwind
+    // scanner, which reads these .rs sources.
+    let size = if small {
+        "px-2 py-1 text-xs"
+    } else {
+        "px-3 py-1.5 text-[0.85rem]"
+    };
+    let class = move || {
+        let state = if liked.get() {
+            "border-accent-border bg-accent-soft text-accent"
+        } else {
+            "border-line bg-transparent text-ink-2 hover:border-accent-border hover:text-ink"
+        };
+        format!("inline-flex flex-none items-center gap-1.5 rounded-full border transition-colors {size} {state}")
+    };
+
     view! {
         <button
-            class="like"
-            class:like-small=small
-            class:liked=move || liked.get()
+            class=class
             on:click=click
             aria-label=move || {
                 if liked.get() { "Un-cry over this son" } else { "Cry over this son" }
@@ -74,10 +93,10 @@ pub fn LikeButton(
             // line-icon language throughout and explicitly rules out emoji
             // standing in for icons. The *wording* keeps the joke -- the
             // accessible label and the metric are still "cry over", not "like".
-            <span class="like-emoji">
+            <span class="inline-flex">
                 <Ico icon=LuHeart size=15/>
             </span>
-            <span class="like-count">{move || count.get()}</span>
+            <span class="tabular-nums">{move || count.get()}</span>
         </button>
     }
 }

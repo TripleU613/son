@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Only three things live here, and each is defined exactly once.
+ *
+ * The 1,200-line cascading stylesheet this replaces is gone because every
+ * layout bug it produced came from the cascade itself: two rules of equal
+ * specificity where the later one silently won (`.filterbar` beating
+ * `.filterbar--page`, a duplicate `.foot` overriding the real one, an
+ * `.icon-btn[aria-current]` rule that never landed). Layout now lives in
+ * utilities on the elements themselves, where there is no source order to lose
+ * a fight to.
+ *
+ * What stays here: base element defaults, and a small set of visual primitives
+ * repeated across many files, where 20 inline utilities would bury the markup.
+ * None of them set layout (no flex/grid/width/margin) -- that is exactly the
+ * category that has to stay visible in the component. */
+
+@layer base {
+  html {
+    background-color: theme("colors.bg");
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    line-height: 1.5;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Never remove focus rings globally; make them the accent instead. */
+  :focus-visible {
+    outline: 2px solid theme("colors.accent.DEFAULT");
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Primary action: filled accent, near-black text, 44px touch target. */
+  .btn {
+    @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded
+      bg-accent px-4 text-[0.9375rem] font-semibold text-accent-ink
+      transition-colors hover:bg-accent-hover active:bg-accent-active
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Icon-only control. Sized 36px inside a taller row that supplies the touch
+   * target. Inherits currentColor so one rule serves every icon. */
+  .icon-btn {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded border
+      border-transparent bg-transparent text-ink-2 transition-colors
+      hover:bg-surface-hover hover:text-ink;
+  }
+
+  /* Current section for icon-only nav links. Background carries the state as
+   * well as the colour, since these controls have no visible text label. */
+  .icon-btn[aria-current="page"] {
+    @apply border-line bg-surface-raised text-accent;
+  }
+
+  /* Neutral secondary action with a visible label. */
+  .btn-quiet {
+    @apply inline-flex min-h-9 items-center gap-2 rounded border border-line
+      bg-transparent px-3 text-[0.85rem] text-ink-2 transition-colors
+      hover:border-line-strong hover:bg-surface-hover hover:text-ink;
+  }
+
+  /* A pill: sort tabs, tags. Selection also shifts weight so it is never
+   * signalled by hue alone. */
+  .chip {
+    @apply inline-flex flex-none items-center whitespace-nowrap rounded-full
+      border border-line bg-transparent px-3.5 text-[0.8125rem] text-ink-2
+      transition-colors hover:border-line-strong hover:text-ink;
+  }
+
+  .chip[aria-pressed="true"],
+  .chip.is-active {
+    @apply border-accent-border bg-accent-soft font-semibold text-accent;
+  }
+
+  /* Text input. */
+  .field {
+    @apply w-full rounded border border-line bg-surface px-3 py-2
+      text-[0.875rem] text-ink placeholder:text-ink-3;
+  }
+
+  /* Card surface. Layout (grid placement, aspect) stays in the component. */
+  .card {
+    @apply flex flex-col overflow-hidden rounded-lg border border-line
+      bg-surface transition-colors hover:border-line-strong
+      hover:bg-surface-hover;
+  }
+}
+
+/* Respect reduced motion once, globally, rather than per rule. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

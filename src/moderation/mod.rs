@@ -84,6 +84,14 @@ impl Verdict {
     }
 }
 
+pub trait Moderator: Send + Sync + 'static {
+    fn assess(&self, img: &DynamicImage) -> anyhow::Result<Verdict>;
+
+    /// Human-readable backend name, surfaced at startup so it is obvious in the
+    /// logs when the real classifier is not actually running.
+    fn name(&self) -> &'static str;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,12 +130,4 @@ mod tests {
     fn passing_verdict_has_no_reason() {
         assert!(v(0.9, 0.01).rejection_reason().is_none());
     }
-}
-
-pub trait Moderator: Send + Sync + 'static {
-    fn assess(&self, img: &DynamicImage) -> anyhow::Result<Verdict>;
-
-    /// Human-readable backend name, surfaced at startup so it is obvious in the
-    /// logs when the real classifier is not actually running.
-    fn name(&self) -> &'static str;
 }

@@ -9,11 +9,23 @@ use leptos::prelude::*;
 use crate::components::icon::{Ico, LuSearch};
 
 #[component]
-pub fn SearchBox(#[prop(optional, into)] extra_class: Option<String>) -> impl IntoView {
-    let cls = format!("searchbox {}", extra_class.unwrap_or_default());
+pub fn SearchBox(
+    /// Reactive so the header can toggle the expanded state; `Signal<String>`
+    /// rather than `Option<String>` because the class now changes at runtime.
+    #[prop(optional, into)]
+    extra_class: Signal<String>,
+) -> impl IntoView {
+    // `flex-1` on mobile so the field fills the top bar, `lg:flex-none` on
+    // desktop where its width comes from the caller's expanded/collapsed class.
+    let cls = move || {
+        format!(
+            "relative flex min-w-0 flex-1 items-center lg:flex-none {}",
+            extra_class.get()
+        )
+    };
     view! {
         <form method="get" action="/search" class=cls role="search">
-            <span class="searchbox-icon">
+            <span class="pointer-events-none absolute left-2.5 inline-flex text-ink-3">
                 <Ico icon=LuSearch size=16/>
             </span>
             <input
@@ -22,6 +34,7 @@ pub fn SearchBox(#[prop(optional, into)] extra_class: Option<String>) -> impl In
                 placeholder="Search sons…"
                 aria-label="Search sons"
                 maxlength="100"
+                class="field pl-8"
             />
         </form>
     }

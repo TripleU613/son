@@ -35,7 +35,7 @@ pub fn SearchPage() -> impl IntoView {
         // crawler reach every son a result links to.
         <Meta name="robots" content="noindex, follow"/>
 
-        <h1 class="page-title">
+        <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">
             {move || {
                 let q = q();
                 if q.is_empty() { "Search".to_string() } else { format!("\u{201C}{q}\u{201D}") }
@@ -63,7 +63,7 @@ pub fn SearchPage() -> impl IntoView {
                         }
                         Ok(sons) => {
                             view! {
-                                <div class="grid">
+                                <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
                                     <For each=move || sons.clone() key=|s| s.id.clone() let:son>
                                         <SonCard son=son/>
                                     </For>

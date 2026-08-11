@@ -25,31 +25,31 @@ pub fn ReportForm(son_id: String) -> impl IntoView {
     view! {
         <Show
             when=move || reported.get().is_none()
-            fallback=|| view! { <p class="reported">"Flagged. Someone will look."</p> }
+            fallback=|| view! { <p class="text-[0.9rem] text-ok">"Flagged. Someone will look."</p> }
         >
             <Show
                 when=move || open.get()
                 fallback=move || {
                     view! {
                         <button
-                            class="btn-quiet"
+                            class="icon-btn"
                             on:click=move |_| set_open.set(true)
-                            aria-label="Report this son"
+                            aria-label="Report"
+                            title="Report"
                         >
-                            <Ico icon=LuFlag size=15/>
-                            <span>"Report"</span>
+                            <Ico icon=LuFlag size=17/>
                         </button>
                     }
                 }
             >
-                <div class="report-form">
-                    <fieldset class="report-reasons">
+                <div class="mt-2.5 grid gap-2.5 rounded border border-line bg-surface p-3.5">
+                    <fieldset class="m-0 grid gap-1.5 border-0 p-0">
                         <legend>"what's wrong with it?"</legend>
                         {ReportReason::all()
                             .into_iter()
                             .map(|r| {
                                 view! {
-                                    <label class="report-reason">
+                                    <label class="flex items-center gap-2 text-[0.9rem]">
                                         <input
                                             type="radio"
                                             name="report-reason"
@@ -64,11 +64,11 @@ pub fn ReportForm(son_id: String) -> impl IntoView {
                     </fieldset>
                     <textarea
                         node_ref=message_input
-                        class="report-message"
+                        class="field min-h-[60px] resize-y"
                         placeholder="anything else? (optional)"
                         maxlength="500"
                     ></textarea>
-                    <div class="report-actions">
+                    <div class="flex items-center gap-2.5">
                         <button
                             class="btn-quiet"
                             disabled=move || report.pending().get()
@@ -79,7 +79,7 @@ pub fn ReportForm(son_id: String) -> impl IntoView {
                         >
                             {move || if report.pending().get() { "flagging…" } else { "submit report" }}
                         </button>
-                        <button class="link-btn" on:click=move |_| set_open.set(false)>
+                        <button class="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:text-danger" on:click=move |_| set_open.set(false)>
                             "Cancel"
                         </button>
                     </div>

@@ -19,9 +19,9 @@ pub enum Density {
 impl Density {
     pub fn grid_class(&self) -> &'static str {
         match self {
-            Density::Compact => "grid grid--compact",
-            Density::Cozy => "grid grid--cozy",
-            Density::List => "grid grid--list",
+            Density::Compact => "grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5 min-[1900px]:grid-cols-8",
+            Density::Cozy => "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 min-[1600px]:grid-cols-5 min-[1900px]:grid-cols-6",
+            Density::List => "grid grid-cols-1 gap-2.5 [&_.card]:flex-row [&_.card]:items-center [&_.card-frame]:aspect-square [&_.card-frame]:h-[84px] [&_.card-frame]:w-[84px]",
         }
     }
 }
@@ -32,9 +32,10 @@ pub fn DensityToggle(
     set_density: WriteSignal<Density>,
 ) -> impl IntoView {
     view! {
-        <div class="density-toggle" role="group" aria-label="View mode">
+        <div class="ml-auto hidden flex-none items-center gap-1 min-[700px]:flex" role="group" aria-label="View mode">
             <button
-                class:active=move || density.get() == Density::Compact
+                class="icon-btn rounded-full"
+                class:is-active=move || density.get() == Density::Compact
                 on:click=move |_| set_density.set(Density::Compact)
                 title="Compact grid"
                 aria-label="Compact grid"
@@ -42,7 +43,8 @@ pub fn DensityToggle(
                 <Ico icon=LuLayoutGrid size=16/>
             </button>
             <button
-                class:active=move || density.get() == Density::Cozy
+                class="icon-btn rounded-full"
+                class:is-active=move || density.get() == Density::Cozy
                 on:click=move |_| set_density.set(Density::Cozy)
                 title="Grid"
                 aria-label="Grid"
@@ -50,7 +52,8 @@ pub fn DensityToggle(
                 <Ico icon=LuGrid2x2 size=16/>
             </button>
             <button
-                class:active=move || density.get() == Density::List
+                class="icon-btn rounded-full"
+                class:is-active=move || density.get() == Density::List
                 on:click=move |_| set_density.set(Density::List)
                 title="List"
                 aria-label="List"
@@ -67,13 +70,13 @@ pub fn DensityToggle(
 #[component]
 pub fn GridSkeleton(#[prop(default = 8)] count: usize) -> impl IntoView {
     view! {
-        <div class="grid grid--cozy" aria-hidden="true">
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4" aria-hidden="true">
             {(0..count)
                 .map(|_| {
                     view! {
-                        <div class="skeleton-card">
-                            <div class="skeleton-thumb"></div>
-                            <div class="skeleton-line"></div>
+                        <div class="overflow-hidden rounded-lg border border-line bg-surface">
+                            <div class="aspect-[4/5] animate-pulse bg-surface-raised"></div>
+                            <div class="m-3 h-3.5 animate-pulse rounded bg-surface-raised"></div>
                         </div>
                     }
                 })

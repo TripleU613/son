@@ -6,6 +6,7 @@ use leptos_router::hooks::use_params_map;
 use crate::api::get_son;
 use crate::components::icon::{Ico, LuDownload, LuSun, LuUserRound};
 use crate::components::like::LikeButton;
+use crate::components::more_sons::MoreSons;
 use crate::components::report::ReportForm;
 use crate::models::Son;
 use crate::seo::{absolute, json_escape};
@@ -74,16 +75,16 @@ pub fn SonDetail() -> impl IntoView {
     let son = Resource::new_blocking(id, |id| async move { get_son(id).await });
 
     view! {
-        <Suspense fallback=|| view! { <p class="loading">"finding the son…"</p> }>
+        <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"finding the son…"</p> }>
             {move || {
                 son.get()
                     .map(|res| match res {
                         Err(e) => {
-                            view! { <p class="error">{e.to_string()}</p> }.into_any()
+                            view! { <p class="text-danger">{e.to_string()}</p> }.into_any()
                         }
                         Ok(None) => {
                             view! {
-                                <section class="empty">
+                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
                                     <h1>"No such son."</h1>
                                     <A href="/">"back to the collection"</A>
                                 </section>
@@ -101,9 +102,9 @@ pub fn SonDetail() -> impl IntoView {
                             let tag_chips = (!s.tags.is_empty()).then(|| {
                                 let tags = s.tags.clone();
                                 view! {
-                                    <div class="detail-tags">
+                                    <div class="mb-3.5 flex flex-wrap gap-1.5">
                                         <For each=move || tags.clone() key=|t| t.slug.clone() let:tag>
-                                            <A href=format!("/tag/{}", tag.slug) attr:class="tag-chip">
+                                            <A href=format!("/tag/{}", tag.slug) attr:class="chip px-2.5 py-0.5 text-[0.7rem]">
                                                 {tag.name.clone()}
                                             </A>
                                         </For>
@@ -148,66 +149,94 @@ pub fn SonDetail() -> impl IntoView {
                                     href=format!("{}?url={}", absolute("/oembed"), page_url)
                                 />
 
-                                <article class="detail">
-                                    <img
-                                        class="detail-img"
-                                        src=s.orig_url.clone()
-                                        alt=s.title.clone()
-                                        width=s.width
-                                        height=s.height
-                                    />
-                                    <div class="detail-meta">
-                                        <h1 class="detail-title">{s.title.clone()}</h1>
+                                <article class="grid grid-cols-1 gap-4 pb-6 min-[860px]:grid-cols-[minmax(0,1fr)_300px] min-[860px]:items-start min-[860px]:gap-6">
+                                    // Constrained figure, not a full-bleed
+                                    // image: capped at 68vh so the son is
+                                    // shown whole without pushing everything
+                                    // else off-screen, and `contain` so a tall
+                                    // son is letterboxed rather than cropped.
+                                    //
+                                    // The frame also hugs the image rather than
+                                    // stretching to fill its grid column. Left
+                                    // to stretch, a 640px-wide son sat in a
+                                    // 932px panel with 150px of dead surface on
+                                    // either side. All three caps are needed:
+                                    // the column (100%), the son's own pixel
+                                    // width (never upscale), and the width the
+                                    // 68vh height cap implies for this aspect
+                                    // (which is what a portrait son is actually
+                                    // limited by). `min()` takes the tightest.
+                                    <figure
+                                        class="m-0 mx-auto flex max-h-[68vh] items-center justify-center overflow-hidden rounded-lg border border-line bg-surface p-3"
+                                        style=format!(
+                                            "max-width: min(100%, calc({}px + 1.5rem), calc(68vh * {:.4} + 1.5rem))",
+                                            s.width,
+                                            f64::from(s.width.max(1)) / f64::from(s.height.max(1)),
+                                        )
+                                    >
+                                        <img
+                                            class="h-auto max-h-[calc(68vh-1.5rem)] w-auto max-w-full rounded object-contain"
+                                            src=s.orig_url.clone()
+                                            alt=s.title.clone()
+                                            width=s.width
+                                            height=s.height
+                                        />
+                                    </figure>
 
-                                        // Sun level: icon + value, no label
-                                        // column. This is the site's own
-                                        // metric, so it leads the metadata.
-                                        <div class="detail-stat">
-                                            <Ico icon=LuSun size=16/>
+                                    <div>
+                                        <h1 class="m-0 mb-3 text-[1.375rem] font-bold tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
+
+                                        <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-line px-2.5 py-1 text-[0.8125rem] font-semibold text-accent">
+                                            <Ico icon=LuSun size=15/>
                                             <span>{s.sonness_label()}</span>
                                         </div>
 
-                                        // Contributor and date on one thin
-                                        // line, replacing a four-row <dl> of
-                                        // label/value pairs.
-                                        <div class="detail-byline">
-                                            <Ico icon=LuUserRound size=15/>
+                                        <div class="flex flex-wrap items-center gap-2 pb-3 text-[0.8125rem] text-ink-3">
+                                            <Ico icon=LuUserRound size=14/>
                                             <span>
                                                 {match &s.uploader {
                                                     Some(u) => u.display_name.clone(),
                                                     None => "anonymous".to_string(),
                                                 }}
                                             </span>
-                                            <span class="detail-sep">"·"</span>
-                                            <span>{s.created_at.chars().take(10).collect::<String>()}</span>
-                                            <span class="detail-sep">"·"</span>
-                                            <span>{format!("{}\u{00D7}{}", s.width, s.height)}</span>
+                                            <span class="text-line-strong">"·"</span>
+                                            <span>
+                                                {s.created_at.chars().take(10).collect::<String>()}
+                                            </span>
                                         </div>
 
                                         {tag_chips}
 
-                                        // Engagement row: icon + value, one
-                                        // line, thin separators instead of
-                                        // nesting each action in its own card.
-                                        <div class="detail-actions">
+                                        // Icon-only actions. The count beside
+                                        // the heart is data, not a label; every
+                                        // control carries an aria-label and a
+                                        // title so the meaning is available to
+                                        // screen readers and on hover.
+                                        // `border-t` only, not `border-y`: the
+                                        // "More sons" section below draws its
+                                        // own top rule, so a bottom rule here
+                                        // left two hairlines 62px apart with
+                                        // nothing between them.
+                                        <div class="my-3 flex items-center gap-2 border-t border-line pt-3">
                                             <LikeButton
                                                 id=s.id.clone()
                                                 initial_count=s.likes
                                                 initial_liked=s.liked_by_me
                                             />
                                             <a
-                                                class="action-btn"
+                                                class="icon-btn"
                                                 href=format!("/son/{}/download", s.id)
-                                                aria-label="Download this son"
+                                                aria-label="Download"
+                                                title="Download"
                                             >
-                                                <Ico icon=LuDownload size=15/>
-                                                <span>"Download"</span>
+                                                <Ico icon=LuDownload size=17/>
                                             </a>
+                                            <ReportForm son_id=s.id.clone()/>
                                         </div>
-
-                                        <ReportForm son_id=s.id.clone()/>
                                     </div>
                                 </article>
+
+                                <MoreSons exclude=s.id.clone()/>
                             }
                                 .into_any()
                         }

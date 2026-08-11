@@ -20,18 +20,16 @@ pub fn Admin() -> impl IntoView {
 
     view! {
         <Title text="admin — son collection"/>
-        <section class="hero">
-            <h1>"report queue"</h1>
-        </section>
+        <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"report queue"</h1>
 
-        <Suspense fallback=|| view! { <p class="loading">"loading queue…"</p> }>
+        <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"loading queue…"</p> }>
             {move || {
                 flagged
                     .get()
                     .map(|res| match res {
                         Err(e) => {
                             view! {
-                                <section class="empty">
+                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
                                     <h2>"Not available."</h2>
                                     <p>{e.to_string()}</p>
                                 </section>
@@ -40,7 +38,7 @@ pub fn Admin() -> impl IntoView {
                         }
                         Ok(rows) if rows.is_empty() => {
                             view! {
-                                <section class="empty">
+                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
                                     <h2>"Queue is empty."</h2>
                                     <p>"Nothing flagged right now."</p>
                                 </section>
@@ -49,7 +47,7 @@ pub fn Admin() -> impl IntoView {
                         }
                         Ok(rows) => {
                             view! {
-                                <div class="admin-queue">
+                                <div class="grid gap-3.5">
                                     <For each=move || rows.clone() key=|f| f.son.id.clone() let:flagged>
                                         <AdminRow flagged=flagged on_change=move || set_refresh.update(|n| *n += 1)/>
                                     </For>
@@ -98,16 +96,20 @@ fn AdminRow(
     });
 
     view! {
-        <article class="admin-row">
-            <img class="admin-thumb" src=son.thumb_url.clone() alt=""/>
-            <div class="admin-row-body">
-                <div class="admin-row-head">
+        <article class="flex flex-col gap-3.5 rounded-lg border border-line bg-surface p-3.5 sm:flex-row">
+            <img class="h-[88px] w-[88px] flex-none rounded object-cover" src=son.thumb_url.clone() alt=""/>
+            <div class="grid min-w-0 flex-1 gap-2">
+                <div class="flex items-center gap-2.5">
                     <a href=format!("/son/{}", son.id)>{son.title.clone()}</a>
-                    <span class="admin-badge" class:public=son.is_public>
+                    <span class=if son.is_public {
+                        "rounded-full bg-ok px-2 py-0.5 text-[0.72rem] text-[#06301c]"
+                    } else {
+                        "rounded-full bg-danger px-2 py-0.5 text-[0.72rem] text-white"
+                    }>
                         {if son.is_public { "visible" } else { "hidden" }}
                     </span>
                 </div>
-                <ul class="admin-reports">
+                <ul class="m-0 pl-5 text-[0.85rem] text-ink-2">
                     <For
                         each={
                             let reports = flagged.reports.clone();
@@ -122,7 +124,7 @@ fn AdminRow(
                         </li>
                     </For>
                 </ul>
-                <div class="admin-actions">
+                <div class="flex items-center gap-2.5">
                     <button
                         class="btn-quiet"
                         disabled=move || toggle.pending().get()
@@ -137,7 +139,7 @@ fn AdminRow(
                         fallback=move || {
                             view! {
                                 <button
-                                    class="btn-quiet danger"
+                                    class="btn-quiet hover:!border-danger hover:!text-danger"
                                     on:click=move |_| set_confirming_delete.set(true)
                                 >
                                     "delete"
@@ -146,7 +148,7 @@ fn AdminRow(
                         }
                     >
                         <button
-                            class="btn-quiet danger"
+                            class="btn-quiet hover:!border-danger hover:!text-danger"
                             disabled=move || delete.pending().get()
                             on:click=move |_| {
                                 delete.dispatch(());
@@ -154,7 +156,7 @@ fn AdminRow(
                         >
                             "really delete? (no undo)"
                         </button>
-                        <button class="link-btn" on:click=move |_| set_confirming_delete.set(false)>
+                        <button class="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:text-danger" on:click=move |_| set_confirming_delete.set(false)>
                             "cancel"
                         </button>
                     </Show>

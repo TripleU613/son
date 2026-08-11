@@ -20,9 +20,9 @@ pub fn Leaderboard() -> impl IntoView {
 
         // No ranking explainer. The list itself communicates the ranking, and
         // the eligibility paragraph that used to sit here was pure narration.
-        <h1 class="page-title">"Leaderboard"</h1>
+        <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"Leaderboard"</h1>
 
-        <Suspense fallback=|| view! { <p class="loading">"tallying…"</p> }>
+        <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"tallying…"</p> }>
             {move || {
                 entries
                     .get()
@@ -36,19 +36,19 @@ pub fn Leaderboard() -> impl IntoView {
                         }
                         Ok(rows) => {
                             view! {
-                                <ol class="leaderboard">
+                                <ol class="m-0 grid list-none gap-2 p-0">
                                     <For each=move || rows.clone() key=|r| r.display_name.clone() let:entry>
-                                        <li class="leaderboard-row">
+                                        <li class="flex items-center gap-3 rounded border border-line bg-surface px-3.5 py-2.5">
                                             {entry
                                                 .avatar_url
                                                 .clone()
                                                 .map(|src| {
                                                     view! {
-                                                        <img class="leaderboard-avatar" src=src alt=""/>
+                                                        <img class="h-8 w-8 flex-none rounded-full object-cover" src=src alt=""/>
                                                     }
                                                 })}
-                                            <span class="leaderboard-name">{entry.display_name.clone()}</span>
-                                            <span class="leaderboard-count">
+                                            <span class="flex-1">{entry.display_name.clone()}</span>
+                                            <span class="text-[0.9rem] tabular-nums text-accent">
                                                 {entry.upload_count}
                                             </span>
                                         </li>

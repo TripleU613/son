@@ -7,7 +7,8 @@ use crate::components::density::{Density, DensityToggle, GridSkeleton};
 use crate::components::empty::EmptyState;
 use crate::components::icon::LuImage;
 use crate::components::infinite_scroll::ScrollSentinel;
-use crate::components::search_box::SearchBox;
+use crate::components::more_sons::MoreSons;
+use crate::components::sort_chips::{use_sort, GalleryView, SortChips, SortCtx};
 use crate::models::{Son, Sort};
 use crate::seo::absolute;
 
@@ -23,10 +24,16 @@ gallery of the son meme, open to anonymous uploads.";
 /// client-side.
 #[component]
 pub fn Gallery() -> impl IntoView {
-    let (sort, set_sort) = signal(Sort::Newest);
+    // The active view comes from app-level context; the tab strip owns writing
+    // it, this component only reads.
+    let SortCtx { view, .. } = use_sort();
+    let sort = Signal::derive(move || view.get().sort());
+    let son_of_day_view = Signal::derive(move || view.get() == GalleryView::SonOfDay);
 
-    // Keyed on `sort`, so flipping the order refetches page one from the server
-    // rather than re-sorting a partial list in the browser.
+    // Keyed on the ordering, so switching tabs refetches page one from the
+    // server rather than re-sorting a partial list in the browser. Not keyed on
+    // the view itself: New -> Son of the day -> New would otherwise throw away
+    // and re-fetch an identical page.
     let first = Resource::new_blocking(
         move || sort.get(),
         |s| async move { list_sons(None, Some(s.as_str().to_string())).await },
@@ -68,7 +75,16 @@ pub fn Gallery() -> impl IntoView {
         let from = cursor.get_untracked();
         let s = sort.get_untracked();
         async move {
-            match list_sons(from, Some(s.as_str().to_string())).await {
+            // A None cursor means "nothing more to continue from" -- either
+            // page one has not resolved yet, or the gallery is exhausted.
+            // Fetching with None re-requests page ONE and appends it, which
+            // duplicated every card: changing sort resets `exhausted`, the
+            // scroll sentinel re-fires before the new first page lands, and the
+            // whole list arrived twice. Page one comes from the blocking
+            // Resource and never from here. Guarded inside the future because
+            // Action's closure must return one.
+            let Some(from) = from else { return };
+            match list_sons(Some(from), Some(s.as_str().to_string())).await {
                 Ok(page) => {
                     let end = page.next_cursor.is_none();
                     set_extra.update(|v| v.extend(page.sons));
@@ -84,15 +100,19 @@ pub fn Gallery() -> impl IntoView {
     let (density, set_density) = signal(Density::default());
 
     // Switching sort invalidates everything accumulated under the old order.
-    let choose = move |s: Sort| {
-        if sort.get_untracked() != s {
+    // An Effect keyed on `sort`, because the chips that change it now live in
+    // the header and no longer have a handler here to hook into. Runs once on
+    // mount too, where resetting already-empty accumulators is a no-op.
+    Effect::new(move |prev: Option<Sort>| {
+        let current = sort.get();
+        if prev.is_some_and(|p| p != current) {
             set_extra.set(Vec::new());
             set_cursor.set(None);
             set_exhausted.set(false);
             set_is_empty.set(false);
-            set_sort.set(s);
         }
-    };
+        current
+    });
 
     view! {
         <Title text="son collection — every son, collected"/>
@@ -102,44 +122,26 @@ pub fn Gallery() -> impl IntoView {
         // No hero. The gallery is the product, so content starts at the top of
         // the page; the title/tagline/marketing copy the old layout opened with
         // is gone rather than reworded.
-        <div class="utilitybar">
-            <SearchBox extra_class="searchbox--wide"/>
+        // Tabs and the view-mode toggle share one row: tabs left, modes right.
+        // The son-of-the-day banner that used to sit above this is now the last
+        // tab instead of a full-width card competing with the grid.
+        <div class="flex min-w-0 items-center gap-3 pb-4">
+            <SortChips class="flex-1"/>
             <DensityToggle density=density set_density=set_density/>
         </div>
 
-        <SonOfTheDay/>
+        <Show when=move || son_of_day_view.get() fallback=|| ()>
+            <SonOfTheDay/>
+        </Show>
 
-        <div class="filterbar" role="group" aria-label="Sort">
-            <button
-                class:active=move || sort.get() == Sort::Newest
-                on:click=move |_| choose(Sort::Newest)
-             aria-label="Sort by newest">
-                "New"
-            </button>
-            <button
-                class:active=move || sort.get() == Sort::MostLiked
-                on:click=move |_| choose(Sort::MostLiked)
-             aria-label="Sort by most cried over">
-                "Cried"
-            </button>
-            <button class:active=move || sort.get() == Sort::Az on:click=move |_| choose(Sort::Az) aria-label="Sort A to Z">
-                "A–Z"
-            </button>
-            <button
-                class:active=move || sort.get() == Sort::SonScore
-                on:click=move |_| choose(Sort::SonScore)
-             aria-label="Sort by sun level">
-                "Sun"
-            </button>
-        </div>
-
+        <Show when=move || !son_of_day_view.get() fallback=|| ()>
         <Suspense fallback=|| view! { <GridSkeleton/> }>
             {move || {
                 first
                     .get()
                     .map(|res| match res {
                         Err(e) => {
-                            view! { <p class="error">"Could not reach the sons: " {e.to_string()}</p> }
+                            view! { <p class="text-danger">"Could not reach the sons: " {e.to_string()}</p> }
                                 .into_any()
                         }
                         Ok(page) => {
@@ -174,8 +176,12 @@ pub fn Gallery() -> impl IntoView {
                     })
             }}
         </Suspense>
+        </Show>
 
-        <div class="more" class:more--hidden=move || is_empty.get()>
+        <div
+            class="py-8 text-center"
+            class:hidden=move || is_empty.get() || son_of_day_view.get()
+        >
             <Show
                 when=move || !exhausted.get()
                 fallback=|| ()
@@ -209,24 +215,38 @@ fn SonOfTheDay() -> impl IntoView {
     let featured = Resource::new(|| (), |_| son_of_the_day());
 
     view! {
-        <Suspense fallback=|| ()>
+        <Suspense fallback=|| view! { <GridSkeleton count=1/> }>
             {move || {
-                featured
-                    .get()
-                    .and_then(Result::ok)
-                    .flatten()
-                    .map(|s| {
-                        let href = format!("/son/{}", s.id);
+                match featured.get().and_then(Result::ok).flatten() {
+                    // Its own tab now, so it gets the grid's card treatment
+                    // rather than a full-width banner shouting above the
+                    // gallery. One card, sized like the others.
+                    Some(s) => {
+                        let id = s.id.clone();
                         view! {
-                            <a href=href class="sotd">
-                                <img class="sotd-thumb" src=s.thumb_url.clone() alt=""/>
-                                <div class="sotd-copy">
-                                    <span class="sotd-label">"son of the day"</span>
-                                    <span class="sotd-title">{s.title.clone()}</span>
-                                </div>
-                            </a>
+                            <div class="max-w-[320px]">
+                                <SonCard son=s/>
+                            </div>
+                            // Fills the rest of the page rather than leaving one
+                            // card alone in the viewport.
+                            <MoreSons exclude=id/>
                         }
-                    })
+                            .into_any()
+                    }
+                    // Nothing featured yet means an empty collection; the same
+                    // empty state the gallery uses.
+                    None => {
+                        view! {
+                            <EmptyState
+                                icon=LuImage
+                                message="No son of the day yet."
+                                action_href="/upload"
+                                action_label="Contribute"
+                            />
+                        }
+                            .into_any()
+                    }
+                }
             }}
         </Suspense>
     }

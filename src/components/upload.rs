@@ -105,16 +105,36 @@ pub fn Upload() -> impl IntoView {
         />
         <Link rel="canonical" href=absolute("/upload")/>
 
-        <section class="upload">
+        <section class="mx-auto max-w-[620px] pt-5">
             // Just the task name. The paragraph that used to sit here narrated
             // the service ("Free, no account. Everything is checked before it
             // goes live…") -- none of which a visitor needs in order to pick a
             // file, so it is gone rather than reworded.
-            <h1 class="page-title">"Contribute"</h1>
+            <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"Contribute"</h1>
 
-            <form on:submit=submit class="upload-form">
-                <label class="drop">
+            // `grid-cols-[minmax(0,1fr)]`, not a bare `grid`: an implicit track
+            // is sized by its widest item's min-content, and the drop zone's
+            // min-content came to 388px at a 393px viewport. That widened the
+            // single track and dragged the file input and submit button out
+            // with it, so the whole form scrolled sideways on a phone. The
+            // explicit `minmax(0, ...)` lets the track shrink below min-content.
+            <form on:submit=submit class="grid grid-cols-[minmax(0,1fr)] gap-3.5">
+                // `has-[:focus-visible]` puts the focus ring on the drop zone,
+                // because the input it belongs to is visually hidden below --
+                // without it a keyboard user tabbing here would see nothing at
+                // all change.
+                <label class="grid min-h-[260px] min-w-0 cursor-pointer grid-cols-[minmax(0,1fr)] place-items-center rounded-lg border-2 border-dashed border-line bg-surface p-5 text-center transition-colors hover:border-accent-border has-[:focus-visible]:border-accent has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
+                    // `sr-only`, not a styled-down native control: a file
+                    // input's width comes from its own "Choose file / no file
+                    // selected" chrome, which is 344px in Chrome and refuses to
+                    // shrink -- `max-width` does not clamp it, so it pushed the
+                    // page sideways at 360px and narrower. The label around it
+                    // already renders the whole drop zone, including the
+                    // "Choose a file" prompt the native button duplicated.
+                    // Hidden this way it stays focusable and screen-reader
+                    // reachable, unlike `display: none`.
                     <input
+                        class="sr-only"
                         type="file"
                         accept="image/png,image/jpeg,image/webp,image/gif"
                         node_ref=file_input
@@ -124,8 +144,8 @@ pub fn Upload() -> impl IntoView {
                         when=move || preview.get().is_some()
                         fallback=|| {
                             view! {
-                                <span class="drop-hint">
-                                    <span class="drop-icon">
+                                <span class="grid gap-1 text-center text-ink-2">
+                                    <span class="mx-auto inline-flex text-ink-3">
                                         <Ico icon=LuCloudUpload size=26/>
                                     </span>
                                     <strong>"Choose a file"</strong>
@@ -138,16 +158,16 @@ pub fn Upload() -> impl IntoView {
                             }
                         }
                     >
-                        <img class="drop-preview" src=move || preview.get().unwrap_or_default()/>
+                        <img class="max-h-[380px] max-w-full rounded" src=move || preview.get().unwrap_or_default()/>
                     </Show>
                 </label>
 
                 <Show when=move || filename.get().is_some()>
-                    <p class="filename">{move || filename.get().unwrap_or_default()}</p>
+                    <p class="m-0 text-[0.85rem] text-ink-3">{move || filename.get().unwrap_or_default()}</p>
                 </Show>
 
                 <input
-                    class="title-input"
+                    class="field"
                     type="text"
                     placeholder="Name this son"
                     maxlength="80"
@@ -165,11 +185,11 @@ pub fn Upload() -> impl IntoView {
                     .map(|r| match r {
                         UploadResult::Ok { son } => {
                             view! {
-                                <div class="outcome ok">
-                                    <span class="outcome-icon">
+                                <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
+                                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-surface-raised text-ok">
                                         <Ico icon=LuCheck size=18/>
                                     </span>
-                                    <p class="outcome-msg">"Uploaded"</p>
+                                    <p class="m-0 text-[0.9375rem] font-semibold text-ink">"Uploaded"</p>
                                     <A href=format!("/son/{}", son.id) attr:class="btn">"View son"</A>
                                 </div>
                             }
@@ -177,12 +197,12 @@ pub fn Upload() -> impl IntoView {
                         }
                         UploadResult::Rejected { reason, son_score, nsfw_score } => {
                             view! {
-                                <div class="outcome rejected">
-                                    <span class="outcome-icon">
+                                <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
+                                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-surface-raised text-danger">
                                         <Ico icon=LuCircleAlert size=18/>
                                     </span>
-                                    <p class="outcome-msg">{reason}</p>
-                                    <p class="scores">
+                                    <p class="m-0 text-[0.9375rem] font-semibold text-ink">{reason}</p>
+                                    <p class="text-[0.85rem] tabular-nums text-ink-3">
                                         {format!(
                                             "sonness {:.0}% · nsfw {:.0}%",
                                             son_score * 100.0,
@@ -195,11 +215,11 @@ pub fn Upload() -> impl IntoView {
                         }
                         UploadResult::Error { message } => {
                             view! {
-                                <div class="outcome error">
-                                    <span class="outcome-icon">
+                                <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
+                                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-surface-raised text-danger">
                                         <Ico icon=LuCircleAlert size=18/>
                                     </span>
-                                    <p class="outcome-msg">{message}</p>
+                                    <p class="m-0 text-[0.9375rem] font-semibold text-ink">{message}</p>
                                 </div>
                             }
                                 .into_any()

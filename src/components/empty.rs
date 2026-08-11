@@ -31,11 +31,11 @@ pub fn EmptyState(
     };
 
     view! {
-        <section class="empty">
-            <span class="empty-icon">
+        <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
+            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-line bg-surface p-3 text-ink-3">
                 <Ico icon=icon size=28/>
             </span>
-            <p class="empty-msg">{message}</p>
+            <p class="m-0 text-base font-semibold text-ink">{message}</p>
             {action}
         </section>
     }
@@ -56,11 +56,11 @@ pub fn ErrorState(
 ) -> impl IntoView {
     let href = retry_href.unwrap_or_else(|| "/".to_string());
     view! {
-        <section class="empty">
-            <span class="empty-icon">
+        <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
+            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-line bg-surface p-3 text-ink-3">
                 <Ico icon=LuCircleAlert size=28/>
             </span>
-            <p class="empty-msg">{message}</p>
+            <p class="m-0 text-base font-semibold text-ink">{message}</p>
             <A href=href attr:class="btn">
                 <Ico icon=LuRefreshCw size=15/>
                 <span>"Try again"</span>

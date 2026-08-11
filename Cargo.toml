@@ -141,7 +141,10 @@ required-features = ["ssr"]
 output-name = "soncollection"
 site-root = "target/site"
 site-pkg-dir = "pkg"
-style-file = "style/main.scss"
+# Tailwind replaces the hand-written stylesheet. cargo-leptos runs the CLI and
+# feeds the result through the same hashed-asset pipeline as before.
+tailwind-input-file = "style/tailwind.css"
+tailwind-config-file = "tailwind.config.js"
 assets-dir = "public"
 # Content-hash the built JS/WASM/CSS filenames. Not a nicety: /pkg/ is served
 # through Cloudflare with cache-control max-age=14400, so at a fixed filename
@@ -152,7 +155,7 @@ assets-dir = "public"
 # A hashed name is a new URL, so a deploy can't be served stale.
 hash-files = true
 # 3000/3001 are commonly occupied (a Next dev server was already on 3000 here).
-site-addr = "127.0.0.1:3100"
+site-addr = "0.0.0.0:3100"
 reload-port = 3101
 browserquery = "defaults"
 bin-features = ["ssr"]

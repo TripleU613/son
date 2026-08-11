@@ -8,11 +8,14 @@ use crate::api::current_user;
 use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
-use crate::components::icon::{Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound};
+use crate::components::icon::{
+    Ico, LuCirclePlus, LuImage, LuLogOut, LuSearch, LuTrophy, LuUserRound,
+};
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
 use crate::components::search::SearchPage;
 use crate::components::search_box::SearchBox;
+use crate::components::sort_chips::{GalleryView, SortCtx};
 use crate::components::tag_page::TagPage;
 use crate::components::upload::Upload;
 
@@ -54,6 +57,11 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 pub fn App() -> impl IntoView {
     provide_meta_context();
 
+    // Sort lives here, not in Gallery: the desktop header renders the same four
+    // filters the mobile in-page row does, and both must drive one value.
+    let (view, set_view) = signal(GalleryView::default());
+    provide_context(SortCtx { view, set_view });
+
     view! {
         <Title text="son collection"/>
 
@@ -64,10 +72,10 @@ pub fn App() -> impl IntoView {
             // duplicate landmarks, and branching on window.innerWidth in Rust
             // would invite the hydration mismatch that already took down the
             // wasm module once this session.
-            <div class="app">
-                <TopBar/>
-                <Rail/>
-                <main class="content">
+            <div class="flex min-h-[100dvh] flex-col">
+                <Header/>
+                <BottomNav/>
+                <main class="mx-auto w-full max-w-content flex-1 px-4 pt-[calc(56px+0.75rem)] pb-[calc(58px+env(safe-area-inset-bottom)+1.5rem)] lg:px-8 lg:pt-[calc(60px+1.5rem)] lg:pb-8">
                     <Routes fallback=NotFound>
                     // Async mode on the two data-driven routes: the default
                     // out-of-order streaming flushes <head> before resources
@@ -88,89 +96,128 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/tos") view=Terms/>
                     </Routes>
                 </main>
+                // Legal links live in a thin footer now that desktop has no
+                // sidebar to hang them off. Padded clear of the mobile bottom
+                // nav rather than competing with it.
+                <footer class="flex justify-center gap-4 px-4 pb-[calc(58px+env(safe-area-inset-bottom)+1rem)] pt-4 text-xs text-ink-3 lg:px-6 lg:pb-8 lg:pt-6">
+                    <A href="/privacy">"Privacy"</A>
+                    <A href="/tos">"Terms"</A>
+                </footer>
             </div>
         </Router>
     }
 }
 
-/// The mobile-only top bar: brand on the left, search and account on the
-/// right. Hidden by CSS at the desktop breakpoint, where the brand lives in the
-/// sidebar and search moves into the gallery's own utility row. Because it is
-/// `display: none` there, only one brand link is ever in the accessibility
-/// tree despite appearing twice in the markup.
+/// The header. On mobile: brand, a search field and the account action. On
+/// desktop it additionally carries the section links and -- on the gallery only
+/// -- the sort chips, replacing the sidebar entirely.
 #[component]
-fn TopBar() -> impl IntoView {
+fn Header() -> impl IntoView {
+    // Search collapses to an icon on desktop and expands in place. Starts
+    // closed, so the server and the first hydration pass agree on the tree.
+    let (search_open, set_search_open) = signal(false);
+
     view! {
-        <header class="topbar">
-            <A href="/" attr:class="brand" attr:aria-label="son collection, home">
-                <span class="brand-word">"son"</span>
-                <span class="brand-tears" aria-hidden="true">
+        <header class="fixed inset-x-0 top-0 z-30 h-topbar border-b border-line bg-bg lg:h-topbar-lg">
+            // Inner wrapper so the bar's contents line up with the content
+            // column below it: the bar stays full-bleed (its border needs to
+            // reach the viewport edges) while the brand and the icons sit on the
+            // same left/right edges as the grid.
+            <div class="mx-auto flex h-full max-w-content items-center gap-3 px-4 lg:gap-4 lg:px-8">
+            <A href="/" attr:class="flex flex-none items-center gap-2 text-xl font-bold leading-none tracking-tight" attr:aria-label="son collection, home">
+                <span class="text-accent">"son"</span>
+                <span class="flex flex-none items-center gap-px text-[0.55em] leading-none" aria-hidden="true">
                     <span>"\u{1F62D}"</span>
                     <span>"\u{1F62D}"</span>
                     <span>"\u{1F62D}"</span>
                 </span>
             </A>
-            <div class="topbar-actions">
-                <SearchBox extra_class="searchbox--bar"/>
-                <AccountAction compact=true/>
+
+            <div class="ml-auto flex min-w-0 items-center gap-2">
+                // Desktop-only section links, as icons alongside search and the
+                // account action. No Gallery entry: the brand is the gallery,
+                // which is the default view. Icon-only, so each carries an
+                // aria-label and a title -- the label is the accessible name,
+                // the title is the hover tooltip.
+                <nav class="hidden flex-none items-center gap-1 lg:flex" aria-label="main">
+                    <A
+                        href="/upload"
+                        attr:class="icon-btn"
+                        attr:aria-label="Contribute"
+                        attr:title="Contribute"
+                    >
+                        <Ico icon=LuCirclePlus size=18/>
+                    </A>
+                    <A
+                        href="/leaderboard"
+                        attr:class="icon-btn"
+                        attr:aria-label="Leaderboard"
+                        attr:title="Leaderboard"
+                    >
+                        <Ico icon=LuTrophy size=18/>
+                    </A>
+                </nav>
+
+                // Icon on desktop, expanding in place; the mobile bar shows the
+                // field directly, since there is room for it there.
+                <button
+                    class="icon-btn hidden lg:inline-flex"
+                    aria-label="Search"
+                    aria-expanded=move || search_open.get().to_string()
+                    title="Search"
+                    on:click=move |_| set_search_open.update(|o| *o = !*o)
+                >
+                    <Ico icon=LuSearch size=18/>
+                </button>
+                // Collapsed to nothing on desktop until the icon above is
+                // clicked, always visible on mobile where the bar has room.
+                // `lg:hidden` rather than a width/opacity transition: an
+                // invisible-but-present field is still focusable, so tabbing
+                // through the header would land in a search box nobody can see.
+                <SearchBox extra_class=Signal::derive(move || {
+                    if search_open.get() {
+                        "lg:flex lg:w-64".to_string()
+                    } else {
+                        "lg:hidden".to_string()
+                    }
+                })/>
+                <AccountAction/>
+                </div>
             </div>
         </header>
     }
 }
 
-/// The primary navigation. A left sidebar on desktop; a fixed bottom bar on
-/// mobile. Same three links either way, in one place in the DOM.
+/// Primary navigation on mobile only: a fixed bottom bar. Desktop uses the
+/// header above instead of a sidebar.
 #[component]
-fn Rail() -> impl IntoView {
+fn BottomNav() -> impl IntoView {
     view! {
-        <aside class="rail">
-            <A href="/" attr:class="rail-brand" attr:aria-label="son collection, home">
-                <span class="brand-word">"son"</span>
-                <span class="brand-tears" aria-hidden="true">
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                </span>
+        <nav class="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="main">
+            // exact, not the default prefix match: every route starts with "/",
+            // so without this the Gallery link would be aria-current on every
+            // page in the app.
+            <A href="/" attr:class="flex min-h-bottomnav flex-1 flex-col items-center justify-center gap-[3px] px-2 py-1 text-ink-3 transition-colors hover:text-ink-2 aria-[current=page]:text-accent" exact=true>
+                <Ico icon=LuImage/>
+                <span class="text-[0.7rem] aria-[current=page]:font-semibold">"Gallery"</span>
             </A>
-
-            <nav class="rail-nav" aria-label="main">
-                // exact, not the default prefix match: every route starts with
-                // "/", so without this the Gallery link would render
-                // aria-current="page" on every page in the app.
-                <A href="/" attr:class="rail-link" exact=true>
-                    <Ico icon=LuImage/>
-                    <span class="rail-label">"Gallery"</span>
-                </A>
-                <A href="/upload" attr:class="rail-link">
-                    <Ico icon=LuCirclePlus/>
-                    <span class="rail-label">"Contribute"</span>
-                </A>
-                <A href="/leaderboard" attr:class="rail-link">
-                    <Ico icon=LuTrophy/>
-                    <span class="rail-label">"Leaderboard"</span>
-                </A>
-            </nav>
-
-            // Desktop-only tail: account plus the legal links that used to sit
-            // in a page-wide footer competing with the bottom nav on mobile.
-            <div class="rail-foot">
-                <AccountAction compact=false/>
-                <div class="rail-legal">
-                    <A href="/privacy">"Privacy"</A>
-                    <A href="/tos">"Terms"</A>
-                </div>
-            </div>
-        </aside>
+            <A href="/upload" attr:class="flex min-h-bottomnav flex-1 flex-col items-center justify-center gap-[3px] px-2 py-1 text-ink-3 transition-colors hover:text-ink-2 aria-[current=page]:text-accent">
+                <Ico icon=LuCirclePlus/>
+                <span class="text-[0.7rem] aria-[current=page]:font-semibold">"Contribute"</span>
+            </A>
+            <A href="/leaderboard" attr:class="flex min-h-bottomnav flex-1 flex-col items-center justify-center gap-[3px] px-2 py-1 text-ink-3 transition-colors hover:text-ink-2 aria-[current=page]:text-accent">
+                <Ico icon=LuTrophy/>
+                <span class="text-[0.7rem] aria-[current=page]:font-semibold">"Leaderboard"</span>
+            </A>
+        </nav>
     }
 }
 
-/// Sign-in link, or the signed-in user's avatar/name plus sign-out. `compact`
-/// drops the name and legal tail for the mobile top bar, where there is only
-/// room for the avatar.
+/// Sign-in link, or the signed-in user's avatar plus sign-out. Always the
+/// compact icon form now that the header is the only place it appears -- the
+/// wider sidebar variant went away with the sidebar.
 #[component]
-fn AccountAction(compact: bool) -> impl IntoView {
+fn AccountAction() -> impl IntoView {
     let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
 
@@ -181,24 +228,18 @@ fn AccountAction(compact: bool) -> impl IntoView {
                     .map(|res| match res {
                         Ok(Some(u)) => {
                             view! {
-                                <div class="account">
+                                <div class="flex min-w-0 items-center gap-2 text-[0.85rem]">
                                     {u.is_admin
                                         .then(|| {
                                             view! {
-                                                <A href="/admin" attr:class="account-admin">"Admin"</A>
+                                                <A href="/admin" attr:class="text-[0.8rem] text-accent">"Admin"</A>
                                             }
                                         })}
                                     {u
                                         .avatar_url
                                         .clone()
-                                        .map(|src| view! { <img class="account-avatar" src=src alt=""/> })}
-                                    {(!compact)
-                                        .then(|| {
-                                            view! {
-                                                <span class="account-name">{u.display_name.clone()}</span>
-                                            }
-                                        })}
-                                    <form method="post" action="/auth/logout" class="account-out">
+                                        .map(|src| view! { <img class="h-6 w-6 flex-none rounded-full object-cover" src=src alt=""/> })}
+                                    <form method="post" action="/auth/logout" class="inline-flex">
                                         <button
                                             type="submit"
                                             class="icon-btn"
@@ -222,22 +263,17 @@ fn AccountAction(compact: bool) -> impl IntoView {
                                 "/auth/google/login?return_to={}",
                                 urlencode(&return_to),
                             );
-                            if compact {
-                                view! {
-                                    <a class="icon-btn" href=href aria-label="Sign in" title="Sign in">
-                                        <Ico icon=LuUserRound size=18/>
-                                    </a>
-                                }
-                                    .into_any()
-                            } else {
-                                view! {
-                                    <a class="rail-signin" href=href>
-                                        <Ico icon=LuUserRound size=16/>
-                                        <span>"Sign in"</span>
-                                    </a>
-                                }
-                                    .into_any()
+                            view! {
+                                <a
+                                    class="icon-btn"
+                                    href=href
+                                    aria-label="Sign in"
+                                    title="Sign in"
+                                >
+                                    <Ico icon=LuUserRound size=18/>
+                                </a>
                             }
+                                .into_any()
                         }
                     })
             }}
@@ -261,8 +297,8 @@ fn urlencode(s: &str) -> String {
 fn NotFound() -> impl IntoView {
     view! {
         <Title text="no son here — son collection"/>
-        <section class="empty">
-            <h1>"404"</h1>
+        <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
+            <h1 class="m-0 text-[2rem] font-bold">"404"</h1>
             <p>"No son at this address. Son 😭"</p>
             <A href="/">"back to the collection"</A>
         </section>
