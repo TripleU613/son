@@ -13,17 +13,27 @@ RUN rustup target add wasm32-unknown-unknown \
 
 WORKDIR /build
 
-# Dependencies first, so an app-code-only change doesn't invalidate this layer.
+# Dependencies compiled against a placeholder crate, in their own layer, before
+# any real source is copied in. This is what actually survives across CI runs:
+# CI's cache-from/cache-to is `type=gha`, which caches plain image layers, not
+# BuildKit `--mount=type=cache` mounts -- those are scoped to a single build
+# and do not persist to the next push at all (a documented upstream
+# limitation, not a guess: docker/build-push-action#1011). A layer, on the
+# other hand, is exactly what `type=gha` restores, and this layer only
+# invalidates when Cargo.toml/Cargo.lock change -- not on every source edit --
+# so candle/aws-sdk-s3/leptos and cargo-leptos's own build only recompile from
+# scratch when a dependency actually changes.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src/components src/storage src/moderation \
     && echo 'fn main() {}' > src/main.rs \
     && echo '' > src/lib.rs \
-    && cargo fetch --locked
+    && cargo leptos build --release \
+    && rm -rf src
 
 COPY src ./src
 COPY style ./style
 COPY public ./public
-# Touch so the placeholder mtimes above don't make cargo skip real rebuilds.
+# Touch so the placeholder mtimes above don't make cargo skip the real build.
 RUN touch src/main.rs src/lib.rs
 
 RUN cargo leptos build --release
