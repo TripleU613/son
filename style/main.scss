@@ -467,6 +467,9 @@ a { color: inherit; text-decoration: none; }
 }
 
 .more { padding: 36px 0; text-align: center; }
+// An empty gallery already says its own piece; pagination furniture beneath it
+// only contradicts the message.
+.more--hidden { display: none; }
 .exhausted { color: var(--ink-dim); }
 
 /* ---------- upload ---------- */
@@ -587,7 +590,10 @@ a { color: inherit; text-decoration: none; }
 
 /* ---------- misc ---------- */
 .empty {
-  padding: 80px 0;
+  // 80px top and bottom left the empty state floating in the middle of a lot
+  // of nothing on a phone -- and on a brand-new site the empty state IS the
+  // page, so that was the whole first impression.
+  padding: 44px 0 56px;
   text-align: center;
 
   h1, h2 { margin: 0 0 8px; }

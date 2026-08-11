@@ -33,6 +33,11 @@ pub fn Gallery() -> impl IntoView {
     let (extra, set_extra) = signal(Vec::<Son>::new());
     let (cursor, set_cursor) = signal(Option::<String>::None);
     let (exhausted, set_exhausted) = signal(false);
+    // Tracked separately from `exhausted`: an empty gallery is technically
+    // exhausted, but rendering "That's every son. For now." directly under
+    // "No sons yet." is self-contradictory, and it was the first thing a
+    // visitor saw on the freshly-launched site.
+    let (is_empty, set_is_empty) = signal(false);
 
     // Seeds cursor/exhausted once the first page resolves. An Effect, not a
     // side effect inside the view-producing closure below: a signal write
@@ -46,6 +51,7 @@ pub fn Gallery() -> impl IntoView {
     // design, so this can't happen here.
     Effect::new(move |_| {
         if let Some(Ok(page)) = first.get() {
+            set_is_empty.set(page.sons.is_empty());
             if cursor.get_untracked().is_none() && !exhausted.get_untracked() {
                 match page.next_cursor {
                     Some(c) => set_cursor.set(Some(c)),
@@ -80,6 +86,7 @@ pub fn Gallery() -> impl IntoView {
             set_extra.set(Vec::new());
             set_cursor.set(None);
             set_exhausted.set(false);
+            set_is_empty.set(false);
             set_sort.set(s);
         }
     };
@@ -162,7 +169,7 @@ pub fn Gallery() -> impl IntoView {
             }}
         </Suspense>
 
-        <div class="more">
+        <div class="more" class:more--hidden=move || is_empty.get()>
             <Show
                 when=move || !exhausted.get()
                 fallback=|| view! { <p class="exhausted">"That's every son. For now."</p> }
