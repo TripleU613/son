@@ -295,4 +295,54 @@ mod tests {
     fn garbage_is_not_an_image() {
         assert!(decode(b"definitely not a png").is_err());
     }
+
+    /// Every stored son is the same square, whatever came in -- the whole point
+    /// of the fixed canvas. Landscape, portrait and already-square all land on
+    /// exactly CANVAS x CANVAS.
+    #[test]
+    fn every_shape_becomes_the_same_square() {
+        for (w, h) in [
+            (640, 360),
+            (360, 640),
+            (1024, 1024),
+            (37, 5),
+            (5, 37),
+            (1, 1),
+        ] {
+            let src = DynamicImage::new_rgba8(w, h);
+            let out = to_square(&src);
+            assert_eq!(
+                (out.width(), out.height()),
+                (CANVAS, CANVAS),
+                "{w}x{h} did not become {CANVAS}x{CANVAS}"
+            );
+        }
+    }
+
+    /// The crop is centred, so a subject in the middle survives. Checked by
+    /// colour rather than by geometry: a red stripe down the centre of a wide
+    /// image must still be red at the centre of the square.
+    #[test]
+    fn crop_keeps_the_middle() {
+        let mut src = image::RgbaImage::from_pixel(600, 200, image::Rgba([0, 0, 0, 255]));
+        for y in 0..200 {
+            for x in 280..320 {
+                src.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        let out = to_square(&DynamicImage::ImageRgba8(src)).to_rgba8();
+        let centre = out.get_pixel(CANVAS / 2, CANVAS / 2);
+        assert!(
+            centre[0] > 200 && centre[1] < 60,
+            "centre pixel was not the red stripe: {centre:?}"
+        );
+    }
+
+    /// A one-pixel-wide input still produces a valid square rather than
+    /// dividing by zero or panicking on a zero-sized crop.
+    #[test]
+    fn extreme_aspect_does_not_panic() {
+        let out = to_square(&DynamicImage::new_rgba8(1, 4000));
+        assert_eq!((out.width(), out.height()), (CANVAS, CANVAS));
+    }
 }

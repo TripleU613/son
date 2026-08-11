@@ -79,6 +79,10 @@ pub fn SonDetail() -> impl IntoView {
                             view! { <p class="text-danger">{e.to_string()}</p> }.into_any()
                         }
                         Ok(None) => {
+                            // A real 404, not the body alone: this URL is the
+                            // shape people paste around, so a typo'd or deleted
+                            // son must not be indexable as a page that exists.
+                            crate::app::set_status(404);
                             view! {
                                 <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
                                     <h1>"No such son."</h1>

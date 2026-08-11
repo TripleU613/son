@@ -172,6 +172,11 @@ that needs to persist lives in a Cloudflare-managed service instead.
 | Images | R2 |
 | Ingress (soncollection.com → the box) | Cloudflare Tunnel |
 
+Three containers: `son-app`, `gemini` (the screening sidecar), and `cloudflared`.
+Only cloudflared is reachable from outside. The sidecar publishes no port at all
+and is addressed as `gemini` on the private compose network — it holds Google
+session cookies, so it stays off the host's interfaces entirely.
+
 `docker-compose.yml` has no `volumes:` section — there is nowhere in it a
 volume could even be declared. The app container also runs `read_only: true`
 with only a `tmpfs` `/tmp`, so this is enforced at the container level too, not
@@ -272,4 +277,8 @@ soncollection.com, so it isn't exempted just for living in a different file.
   without any content analysis.
 - Google sign-in is built but dormant — the redirect URIs still need registering
   in the Google console.
+- Cloudflare Web Analytics is wired but dormant: `CF_ANALYTICS_TOKEN` needs a
+  site created in the Cloudflare dashboard (the D1-scoped API token cannot do
+  it). Edge-side analytics — requests, bandwidth, cache ratio, threats — are
+  already on for the proxied domain and need nothing.
 - The generator

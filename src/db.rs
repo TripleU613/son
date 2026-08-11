@@ -940,3 +940,55 @@ pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugs_are_url_safe() {
+        assert_eq!(slugify("Capri-Son"), "capri-son");
+        assert_eq!(slugify("Son of Man"), "son-of-man");
+        assert_eq!(slugify("  Sonion!!  "), "sonion");
+        assert_eq!(slugify("Son   of    spaces"), "son-of-spaces");
+    }
+
+    /// Empty rather than a placeholder, so the caller can fall back to the id.
+    /// A title of pure punctuation or non-Latin script has nothing to slug.
+    #[test]
+    fn unsluggable_titles_are_empty() {
+        assert_eq!(slugify("!!!"), "");
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("😭😭😭"), "");
+    }
+
+    /// Trigrams are what the fuzzy fallback ORs together, so a term shorter than
+    /// one must produce nothing rather than a partial gram that matches
+    /// everything.
+    #[test]
+    fn trigrams_need_three_characters() {
+        assert!(trigrams("dy").is_empty());
+        assert!(trigrams("").is_empty());
+        assert_eq!(trigrams("sonion"), ["son", "oni", "nio", "ion"]);
+    }
+
+    /// FTS5 reads a bare hyphen as NOT and errors with `no such column`, and an
+    /// unescaped quote ends the phrase early. Both must survive quoting.
+    #[test]
+    fn fts_phrases_neutralise_operators() {
+        assert_eq!(fts_phrase("capri-son"), "\"capri-son\"");
+        assert_eq!(fts_phrase("say \"son\""), "\"say \"\"son\"\"\"");
+    }
+
+    #[test]
+    fn admin_emails_match_case_insensitively_and_exactly() {
+        // SAFETY: single-threaded test, and the var is read only here.
+        unsafe { std::env::set_var("ADMIN_EMAILS", "Boss@Example.com, other@example.com") };
+        assert!(is_admin_email("boss@example.com"));
+        assert!(is_admin_email("  OTHER@EXAMPLE.COM  "));
+        assert!(!is_admin_email("boss@example.com.evil.test"));
+        assert!(!is_admin_email("nobody@example.com"));
+        unsafe { std::env::remove_var("ADMIN_EMAILS") };
+        assert!(!is_admin_email("boss@example.com"));
+    }
+}

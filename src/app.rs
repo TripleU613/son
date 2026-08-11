@@ -403,8 +403,27 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+/// Set the response status during SSR.
+///
+/// Without this a missing page renders the 404 body under HTTP 200 -- a soft
+/// 404, which Google treats as a thin duplicate of every other soft 404 on the
+/// site rather than as "gone". No-op on the client, where the response has
+/// already been sent.
+pub fn set_status(code: u16) {
+    #[cfg(feature = "ssr")]
+    if let Some(resp) = use_context::<leptos_axum::ResponseOptions>() {
+        resp.set_status(
+            axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::OK),
+        );
+    }
+    #[cfg(not(feature = "ssr"))]
+    let _ = code;
+}
+
 #[component]
 fn NotFound() -> impl IntoView {
+    set_status(404);
+
     view! {
         <Title text="no son here — son collection"/>
         <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
