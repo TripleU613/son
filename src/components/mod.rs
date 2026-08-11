@@ -13,6 +13,7 @@ pub mod more_sons;
 pub mod report;
 pub mod search;
 pub mod search_box;
+pub mod share;
 pub mod sort_chips;
 pub mod tag_page;
 pub mod upload;

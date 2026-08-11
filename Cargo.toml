@@ -34,7 +34,14 @@ gloo-net = { version = "0.6", features = ["http"], optional = true }
 web-sys = { version = "0.3", features = [
   "File", "FileList", "FormData", "Blob", "Url", "HtmlInputElement",
   "IntersectionObserver", "IntersectionObserverInit", "IntersectionObserverEntry",
+  # Share/copy button: navigator.share where it exists, clipboard where it
+  # doesn't. Both are behind their own web-sys features.
+  "Navigator", "Clipboard", "ShareData", "Location",
 ], optional = true }
+# Only for awaiting the clipboard promise, so "Copied" is shown after the write
+# succeeds rather than after it was merely requested. Already in the tree via
+# leptos; named here because this crate uses it directly.
+wasm-bindgen-futures = { version = "0.4", optional = true }
 
 # --- ssr-only (server) ---
 leptos_axum = { version = "0.8.10", optional = true }
@@ -99,6 +106,7 @@ hydrate = [
   "dep:console_error_panic_hook",
   "dep:gloo-net",
   "dep:web-sys",
+  "dep:wasm-bindgen-futures",
 ]
 ssr = [
   "leptos/ssr",

@@ -8,6 +8,7 @@ use crate::components::icon::{Ico, LuDownload, LuSun, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::more_sons::MoreSons;
 use crate::components::report::ReportForm;
+use crate::components::share::ShareButton;
 use crate::models::Son;
 use crate::seo::{absolute, json_escape};
 
@@ -231,6 +232,14 @@ pub fn SonDetail() -> impl IntoView {
                                             >
                                                 <Ico icon=LuDownload size=17/>
                                             </a>
+                                            // The canonical path. ShareButton
+                                            // resolves it against the live
+                                            // origin, because absolute() is a
+                                            // no-op in the wasm build.
+                                            <ShareButton
+                                                url=page_url.clone()
+                                                title=s.title.clone()
+                                            />
                                             <ReportForm son_id=s.id.clone()/>
                                         </div>
                                     </div>

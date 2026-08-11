@@ -905,34 +905,141 @@ pub async fn sons_by_tag(
     Ok(SonPage { sons, next_cursor })
 }
 
-/// Full-text search over titles via the `sons_fts` FTS5 index (see the
-/// migration for why external-content mode and its sync triggers), not a
-/// `LIKE '%term%'` scan.
+/// The shortest text the trigram tokeniser can index. A one- or two-character
+/// term produces no trigrams at all and matches nothing -- silently, with no
+/// error -- so those queries take the LIKE path instead.
+const MIN_TRIGRAM: usize = 3;
+
+/// How many results the fuzzy fallback may return. Far below `PAGE_SIZE`: past
+/// the first few, a row is only there because it shares an incidental trigram
+/// with the query, and a page of those reads as broken rather than helpful.
+const FUZZY_LIMIT: i64 = 8;
+
+/// Wraps a user's term as an FTS5 phrase. Unavoidable, not defensive: FTS5
+/// reads `-` as NOT, so an unquoted "capri-son" fails outright with
+/// `no such column: son`. A search box is free text, not a query language.
+fn fts_phrase(term: &str) -> String {
+    format!("\"{}\"", term.replace('"', "\"\""))
+}
+
+/// Every 3-character window of `s`, lowercased -- the same units the trigram
+/// index stores, so OR-ing them scores a row by how much of the query it
+/// actually contains. This is what makes a misspelling still find its son.
+fn trigrams(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.to_lowercase().chars().collect();
+    if chars.len() < MIN_TRIGRAM {
+        return vec![];
+    }
+    chars
+        .windows(MIN_TRIGRAM)
+        .map(|w| w.iter().collect::<String>())
+        .filter(|t| !t.trim().is_empty())
+        .collect()
+}
+
+/// Search over titles *and* tag names, via the trigram `sons_search` index.
+///
+/// Two precise passes and one forgiving one, because a single query cannot be
+/// both and a visitor typing into a box has no way to tell us which they meant:
+///
+/// 1. **Exact-ish:** every term must appear somewhere in the title or tags.
+///    Trigram matching means a term hits *inside* a word, not just at its start,
+///    so "flower" finds Sonflower and "apri" finds Capri-Son. On a site whose
+///    entire joke is words with "son" buried in them, that is the common case,
+///    not an edge case. Terms too short to have trigrams are ANDed in as LIKE
+///    conditions in the same query, so "dy son" still means both.
+/// 2. **Fuzzy**, only if the first pass found nothing: OR the query's trigrams
+///    and let bm25 rank by how much of the query each son actually contains, so
+///    one wrong keystroke lands on the right son instead of an empty page.
+///
+/// Capped tighter than a normal page: this tier is a "did you mean", and every
+/// row past the first few shares a trigram or two with the query by accident.
+///
+/// Ordered by relevance, not recency.
 pub async fn search_sons(query: &str, voter: Option<&str>) -> anyhow::Result<Vec<Son>> {
-    let sql = format!(
-        "{SON_SELECT} \
-         JOIN sons_fts ON sons_fts.rowid = s.rowid \
-         WHERE s.is_public = 1 AND sons_fts MATCH ?1 \
-         ORDER BY rank \
-         LIMIT ?2"
-    );
-    // FTS5's query syntax treats several characters as operators (", *, -,
-    // etc.); a search box is free text, not a query language, so each term is
-    // quoted and the quote-escaped, then joined as an implicit AND -- this
-    // turns "what the" into a phrase search for both words present, never a
-    // syntax error from a stray character a visitor typed.
-    let escaped = query
-        .split_whitespace()
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if escaped.is_empty() {
+    let terms: Vec<&str> = query.split_whitespace().collect();
+    if terms.is_empty() {
         return Ok(vec![]);
     }
 
-    let rows: Vec<SonRow> = client()
-        .query(&sql, vec![json!(escaped), json!(PAGE_SIZE)])
-        .await?;
+    // Split by what the index can actually answer. Sending a 1-2 character term
+    // to a trigram index matches nothing at all -- silently, with no error -- so
+    // those have to be asked a different way, in the same query rather than
+    // instead of it. Getting this wrong turned "dy son" from one exact hit into
+    // the entire gallery, because the whole query fell through to fuzzy.
+    let (long, short): (Vec<&str>, Vec<&str>) =
+        terms.iter().partition(|t| t.chars().count() >= MIN_TRIGRAM);
+
+    let mut where_parts = vec!["s.is_public = 1".to_string()];
+    let mut params: Vec<serde_json::Value> = vec![];
+
+    if !long.is_empty() {
+        params.push(json!(long
+            .iter()
+            .map(|t| fts_phrase(t))
+            .collect::<Vec<_>>()
+            .join(" ")));
+        where_parts.push(format!("sons_search MATCH ?{}", params.len()));
+    }
+    for term in &short {
+        // `%` and `_` escaped, or a visitor typing "100%" matches every son.
+        params.push(json!(format!(
+            "%{}%",
+            term.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        )));
+        let i = params.len();
+        where_parts.push(format!(
+            "(sons_search.title LIKE ?{i} ESCAPE '\\' OR sons_search.tags LIKE ?{i} ESCAPE '\\')"
+        ));
+    }
+
+    // Only rank by relevance when there is a MATCH to rank by: bm25 is
+    // meaningless for a pure-LIKE query, and `ORDER BY rank` without a MATCH is
+    // an error rather than a no-op.
+    let order = if long.is_empty() {
+        "s.created_at DESC"
+    } else {
+        "rank"
+    };
+    params.push(json!(PAGE_SIZE));
+    let sql = format!(
+        "{SON_SELECT} \
+         JOIN sons_search ON sons_search.rowid = s.rowid \
+         WHERE {} \
+         ORDER BY {order} \
+         LIMIT ?{}",
+        where_parts.join(" AND "),
+        params.len(),
+    );
+
+    let mut rows: Vec<SonRow> = client().query(&sql, params).await?;
+
+    // Fuzzy fallback. Deliberately drops the AND between terms as well as the
+    // requirement to match at all -- a misspelling is usually one term of
+    // several, and insisting on the others would keep the result set empty.
+    if rows.is_empty() {
+        let grams: Vec<String> = terms.iter().flat_map(|t| trigrams(t)).collect();
+        if !grams.is_empty() {
+            let expr = grams
+                .iter()
+                .map(|g| fts_phrase(g))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let sql = format!(
+                "{SON_SELECT} \
+                 JOIN sons_search ON sons_search.rowid = s.rowid \
+                 WHERE s.is_public = 1 AND sons_search MATCH ?1 \
+                 ORDER BY rank \
+                 LIMIT ?2"
+            );
+            rows = client()
+                .query(&sql, vec![json!(expr), json!(FUZZY_LIMIT)])
+                .await?;
+        }
+    }
+
     let mut sons: Vec<Son> = rows.into_iter().map(Son::from).collect();
     mark_liked(&mut sons, voter).await?;
     attach_tags_to(&mut sons).await?;

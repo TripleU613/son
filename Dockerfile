@@ -11,6 +11,27 @@ FROM rust:1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install cargo-leptos --locked
 
+# Tailwind's standalone binary, so the CSS build needs no Node toolchain in the
+# image. Pinned to an exact version with its checksum verified, for the same
+# reason the base images are pinned by digest: this runs in a public repo's
+# build and must not depend on whatever a moving URL serves today.
+#
+# Installed explicitly rather than left to cargo-leptos's own tool download:
+# that would resolve a version at build time, and Tailwind 4 reads
+# tailwind.config.js only in a legacy compatibility path, so an implicit
+# upgrade would quietly change what CSS this image ships.
+#
+# linux-x64 because CI builds for the runner's native platform (no `platforms:`
+# in the workflow) and deploys to an amd64 host. A wrong-arch pull fails loudly
+# here rather than at runtime.
+ARG TAILWIND_VERSION=3.4.19
+ARG TAILWIND_SHA256=4af3198c015616ea7d6617974ec3d70d987ecc00c1ca8463b0a30fd65cc7c06e
+RUN curl -fsSL -o /usr/local/bin/tailwindcss \
+      "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWIND_VERSION}/tailwindcss-linux-x64" \
+    && echo "${TAILWIND_SHA256}  /usr/local/bin/tailwindcss" | sha256sum -c - \
+    && chmod +x /usr/local/bin/tailwindcss \
+    && tailwindcss --help | head -1
+
 WORKDIR /build
 
 # Dependencies compiled against a placeholder crate, in their own layer, before
@@ -24,7 +45,7 @@ WORKDIR /build
 # so candle/aws-sdk-s3/leptos and cargo-leptos's own build only recompile from
 # scratch when a dependency actually changes.
 # Plain `cargo build`, not `cargo leptos build`, against the placeholder:
-# cargo-leptos's build also runs wasm-bindgen post-processing, SCSS
+# cargo-leptos's build also runs wasm-bindgen post-processing, Tailwind CSS
 # compilation, and asset bundling, which expect a real hydrate() entrypoint
 # to exist -- an empty lib.rs makes cargo-leptos itself fail outright (this
 # was tried and observed failing in CI, not assumed). Plain `cargo build`
@@ -43,6 +64,12 @@ RUN mkdir -p src/components src/storage src/moderation \
 COPY src ./src
 COPY style ./style
 COPY public ./public
+# tailwind.config.js is a build input, not tooling config to leave behind: it
+# holds the palette, radii, chrome heights and content widths, and its `content`
+# glob is what stops every utility being purged. Omitting it is what broke the
+# first CI run after the Tailwind migration -- cargo-leptos is pointed at it by
+# `tailwind-config-file` and fails outright when it is missing.
+COPY tailwind.config.js ./
 # Touch so the placeholder mtimes above don't make cargo skip the real build.
 RUN touch src/main.rs src/lib.rs
 
