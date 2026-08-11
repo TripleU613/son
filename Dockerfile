@@ -80,8 +80,17 @@ COPY --from=model --chown=son:son /model /app/models/clip-vit-base-patch32
 # under /app is written to at runtime. Uploads go to R2, all state lives in D1.
 USER son
 
+# LEPTOS_HASH_FILES must be set at RUNTIME, not just as `hash-files` in
+# Cargo.toml. That metadata only tells cargo-leptos to emit hashed filenames at
+# build time; LeptosOptions reads hash_files from the environment and defaults
+# it to false, and no Cargo.toml ships in this image. Without it the build
+# produces ONLY hashed assets while the served HTML asks for the unhashed names
+# -- an HTTP 200 with no CSS and no wasm. This shipped exactly once: it looked
+# fine only because Cloudflare still had the previous build's files cached, and
+# would have gone unstyled the moment that expired.
 ENV LEPTOS_SITE_ADDR=0.0.0.0:3100 \
     LEPTOS_SITE_ROOT=/app/site \
+    LEPTOS_HASH_FILES=true \
     CLIP_MODEL_DIR=/app/models/clip-vit-base-patch32
 
 EXPOSE 3100
