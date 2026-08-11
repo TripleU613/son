@@ -1,11 +1,11 @@
-# Deployed on bulky-server. No bind mounts, no named volumes: "no storage on
+# Deployed on debiantripleu. No bind mounts, no named volumes: "no storage on
 # the server" is enforced structurally here, not just by convention -- there
 # is nowhere in this file a volume could even be declared for the app to write
 # application data into. Uploads go to R2, all state lives in D1.
 #
 # The app container publishes no host port at all. cloudflared is the only way
 # in, reaching `son-app` by its Compose service name over the private network
-# this file defines -- nothing on bulky-server needs an inbound firewall rule
+# this file defines -- nothing on debiantripleu needs an inbound firewall rule
 # for web traffic, matching how it is already reached only over Tailscale SSH.
 #
 # Every value below except the two image references comes from the calling
@@ -18,15 +18,18 @@ services:
     image: ${SON_IMAGE}
     restart: unless-stopped
     read_only: true
-    # Hard resource ceilings. bulky-server is NOT a dedicated box -- it also
-    # runs postgres, grafana, loki, bugsink and ntfy -- and the first deploy
-    # of this file had no limits at all, which let CLIP's model load starve
-    # the host badly enough that SSH and ICMP both stopped answering. An
-    # unbounded container on a shared host is the actual defect there; these
-    # limits mean the worst case is this container dying instead of the box
-    # becoming unreachable.
-    mem_limit: 2g
-    memswap_limit: 2g
+    # Hard resource ceilings, and they are not optional. The first deploy of
+    # this file had no limits at all and went to a shared 2-core/3.7GB host
+    # that was already swap-saturated; loading the ~600MB CLIP model starved
+    # it until both SSH and ICMP stopped answering for ~10 minutes. An
+    # unbounded container on a shared host is the real defect, so the worst
+    # case here is this container being killed rather than the box going dark.
+    #
+    # 4g/2cpu is sized against the current target (debiantripleu: 15.4GB RAM,
+    # ~10.7GB available, 4 cores) -- comfortably above what CLIP needs, while
+    # still leaving the host's other 13 containers their headroom.
+    mem_limit: 4g
+    memswap_limit: 4g
     cpus: 2.0
     # /tmp only, for whatever transient scratch space the process or its
     # libraries expect (e.g. temp files during image decode) -- not a place
