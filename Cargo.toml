@@ -43,6 +43,11 @@ reqwest = { version = "0.13", default-features = false, features = [
 ], optional = true }
 serde_json = { version = "1", optional = true }
 image = { version = "0.25", optional = true }
+# For writing iTXt provenance chunks into stored PNGs -- already in the
+# dependency graph transitively via `image`, declared directly here because
+# that low-level chunk-writing API isn't exposed through `image`'s own
+# encoder.
+png = { version = "0.18", optional = true }
 async-trait = { version = "0.1", optional = true }
 # Only the S3 client; the Config is built by hand from env vars, so aws-config
 # and its credential-chain machinery are not needed.
@@ -98,6 +103,7 @@ ssr = [
   "dep:reqwest",
   "dep:serde_json",
   "dep:image",
+  "dep:png",
   "dep:async-trait",
   "dep:aws-sdk-s3",
   "dep:candle-core",

@@ -1,8 +1,9 @@
 //! `POST /api/upload` — multipart image intake.
 //!
-//! Order matters and is deliberate: decode → moderate → store → insert. Nothing
-//! is written to disk until the classifier has passed it, so a rejected upload
-//! leaves no trace to clean up.
+//! Order matters and is deliberate: decode+hash → moderate → dedupe-check →
+//! store (watermark + provenance metadata) → insert. Nothing is written to
+//! disk until the classifier has passed it and the dedupe checks have
+//! cleared, so a rejected or duplicate upload leaves no trace to clean up.
 
 use crate::models::UploadResult;
 use crate::moderation::Moderator;
@@ -69,10 +70,19 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
 
     // Decoding is CPU-bound and attacker-influenced; keep it off the async
     // runtime's worker threads so one huge image can't stall request handling.
-    let decoded = tokio::task::spawn_blocking(move || crate::storage::decode(&bytes)).await;
+    // The content hash rides along in the same blocking call: it's a hash of
+    // the decoded pixel buffer (not the raw upload bytes), computed here
+    // because this is the one place that buffer exists before it's consumed
+    // by moderation and storage.
+    let decoded = tokio::task::spawn_blocking(move || {
+        let img = crate::storage::decode(&bytes)?;
+        let hash = crate::dedupe::sha256_hex(img.to_rgba8().as_raw());
+        Ok::<_, anyhow::Error>((img, hash))
+    })
+    .await;
 
-    let img = match decoded {
-        Ok(Ok(img)) => img,
+    let (img, content_hash) = match decoded {
+        Ok(Ok(pair)) => pair,
         Ok(Err(e)) => return bad(StatusCode::BAD_REQUEST, e.to_string()),
         Err(e) => {
             return bad(
@@ -123,7 +133,58 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         );
     }
 
-    let stored = match crate::storage::store(&img).await {
+    // Exact duplicate: same decoded pixels as something already here,
+    // regardless of container format. A single indexed lookup.
+    match crate::db::find_by_hash(&content_hash).await {
+        Ok(Some(existing)) => {
+            tracing::info!(existing = existing.id, "upload rejected: exact duplicate");
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(UploadResult::Rejected {
+                    reason: format!(
+                        "this exact image is already in the collection: /son/{}",
+                        existing.id
+                    ),
+                    son_score: verdict.son_score,
+                    nsfw_score: verdict.nsfw_score,
+                }),
+            );
+        }
+        Ok(None) => {}
+        // A dedupe-check outage shouldn't block an otherwise-good upload;
+        // log loudly and let it through rather than fail the whole request.
+        Err(e) => tracing::error!("hash dedupe check failed: {e}"),
+    }
+
+    // Near duplicate: a resize/recompress/light crop of something already
+    // here, caught via CLIP embedding similarity instead of an exact hash.
+    if let Some(embedding) = verdict.embedding.as_deref() {
+        match crate::dedupe::find_near_duplicate(embedding).await {
+            Ok(Some(existing_id)) => {
+                tracing::info!(existing = existing_id, "upload rejected: near duplicate");
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(UploadResult::Rejected {
+                        reason: format!("a very similar son is already here: /son/{existing_id}"),
+                        son_score: verdict.son_score,
+                        nsfw_score: verdict.nsfw_score,
+                    }),
+                );
+            }
+            Ok(None) => {}
+            Err(e) => tracing::error!("near-duplicate check failed: {e}"),
+        }
+    }
+
+    let title = clean_title(&title);
+
+    let stored = match crate::storage::store(
+        &img,
+        &title,
+        uploader.as_ref().map(|u| u.display_name.as_str()),
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("store failed: {e}");
@@ -134,7 +195,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         }
     };
 
-    let title = clean_title(&title);
     let tag_names = parse_tags(&tags_raw);
 
     let son = crate::db::insert(crate::db::NewSon {
@@ -147,6 +207,7 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         son_score: verdict.son_score,
         nsfw_score: verdict.nsfw_score,
         embedding: verdict.embedding.as_deref(),
+        content_hash: &content_hash,
         uploader_id: uploader.as_ref().map(|u| u.id.as_str()),
         uploader: uploader.as_ref().map(|u| crate::models::Uploader {
             display_name: u.display_name.clone(),

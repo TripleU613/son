@@ -11,6 +11,8 @@ pub mod d1;
 #[cfg(feature = "ssr")]
 pub mod db;
 #[cfg(feature = "ssr")]
+pub mod dedupe;
+#[cfg(feature = "ssr")]
 pub mod moderation;
 #[cfg(feature = "ssr")]
 pub mod oauth_route;
@@ -22,6 +24,8 @@ pub mod seo_route;
 pub mod storage;
 #[cfg(feature = "ssr")]
 pub mod upload_route;
+#[cfg(feature = "ssr")]
+pub mod watermark;
 
 /// Wasm entry point. `cargo-leptos` wires this into the generated JS loader.
 #[cfg(feature = "hydrate")]

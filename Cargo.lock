@@ -4446,6 +4446,7 @@ dependencies = [
  "leptos_axum",
  "leptos_meta",
  "leptos_router",
+ "png",
  "rand 0.10.2",
  "reqwest",
  "serde",

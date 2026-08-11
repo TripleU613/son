@@ -290,6 +290,47 @@ pub async fn get(id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
     Ok(Some(son))
 }
 
+/// Exact-duplicate lookup by content hash, across every son regardless of
+/// `is_public` -- a hidden son re-uploaded byte-for-identical is still the
+/// same file, and catching that closes an easy moderation-evasion loop
+/// (hide it, then just upload it again).
+pub async fn find_by_hash(hash: &str) -> anyhow::Result<Option<Son>> {
+    let sql = format!("{SON_SELECT} WHERE s.content_hash = ?1 LIMIT 1");
+    let rows: Vec<SonRow> = client().query(&sql, vec![json!(hash)]).await?;
+    Ok(rows.into_iter().next().map(Son::from))
+}
+
+/// Every son's CLIP embedding, for the near-duplicate scan in `dedupe`. Rows
+/// with no embedding (moderation backend was `stub`/`deny`, or the row
+/// predates embeddings existing at all) are skipped, not returned as an
+/// empty vector -- an empty embedding would otherwise compare as
+/// "maximally dissimilar" to everything, which is a misleading answer for
+/// "we don't actually know."
+pub async fn all_embeddings() -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+    #[derive(Deserialize)]
+    struct Row {
+        id: String,
+        embedding: Option<Vec<u8>>,
+    }
+    let rows: Vec<Row> = client()
+        .query(
+            "SELECT id, embedding FROM sons WHERE embedding IS NOT NULL",
+            vec![],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let bytes = r.embedding?;
+            let floats = bytes
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            Some((r.id, floats))
+        })
+        .collect())
+}
+
 pub struct NewSon<'a> {
     pub id: &'a str,
     pub title: &'a str,
@@ -300,6 +341,10 @@ pub struct NewSon<'a> {
     pub son_score: f32,
     pub nsfw_score: f32,
     pub embedding: Option<&'a [f32]>,
+    /// SHA-256 of the decoded pixel buffer, for exact-duplicate detection.
+    /// Always computed for a new upload; only rows inserted before this
+    /// column existed lack one.
+    pub content_hash: &'a str,
     /// Who uploaded this, if they were signed in. `None` for an anonymous
     /// upload — still fully supported; accounts are additive, not a gate.
     pub uploader_id: Option<&'a str>,
@@ -327,8 +372,8 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
         .exec(
             "INSERT INTO sons (id, title, orig_url, thumb_url, width, height, \
                                son_score, nsfw_score, embedding, created_at, is_public, reports, \
-                               uploader_id) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0,?11)",
+                               uploader_id, content_hash) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0,?11,?12)",
             vec![
                 json!(new.id),
                 json!(new.title),
@@ -341,6 +386,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
                 blob,
                 json!(created_at),
                 json!(new.uploader_id),
+                json!(new.content_hash),
             ],
         )
         .await?;

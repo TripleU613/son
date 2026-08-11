@@ -1,9 +1,17 @@
-//! Image intake: decode, bound, thumbnail, persist.
+//! Image intake: decode, bound, thumbnail, watermark, persist.
 //!
 //! Persistence sits behind the `Backend` trait so the same intake path works
 //! against local disk in development and Cloudflare R2 in production. Object
 //! keys are generated UUIDs, never anything the uploader supplies, so there is
 //! no path-traversal or key-injection surface either way.
+//!
+//! Every original is re-encoded to PNG from raw decoded pixels (strips EXIF
+//! and anything smuggled after the image data), carries an invisible
+//! provenance watermark (see `watermark`), and gets this site's own text
+//! metadata written back in rather than whatever the source file had.
+//! Duplicate detection (`dedupe`) and moderation (`moderation`) both happen
+//! in `upload_route` before any of this runs -- this module only ever sees
+//! an image that has already cleared both.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,6 +91,11 @@ pub struct Stored {
     pub height: u32,
 }
 
+/// The prefix embedded in every original's invisible watermark. Kept short:
+/// the payload competes with image content for bits, and this is already
+/// enough to trace a copy back to a specific upload via `watermark::extract`.
+const WATERMARK_PREFIX: &str = "son-collection:v1:";
+
 /// Decode bytes into an image, rejecting anything oversized before it is
 /// rasterized. Separate from `store` so moderation can inspect the pixels
 /// before anything is persisted.
@@ -127,13 +140,34 @@ pub fn thumb_key(id: &str) -> String {
 /// Persist the original (re-encoded to PNG, which strips EXIF and any payload
 /// smuggled after the image data) plus a thumbnail. Call only after moderation
 /// has passed.
-pub async fn store(img: &DynamicImage) -> anyhow::Result<Stored> {
+///
+/// `title`/`uploader_name` are written back into the original's PNG text
+/// chunks -- provenance metadata the site controls, replacing whatever
+/// (or nothing) the source file carried before the EXIF strip.
+pub async fn store(
+    img: &DynamicImage,
+    title: &str,
+    uploader_name: Option<&str>,
+) -> anyhow::Result<Stored> {
     let id = Uuid::new_v4().to_string();
     let (width, height) = (img.width(), img.height());
+    let page_url = crate::seo::absolute(&format!("/son/{id}"));
 
     let thumb = img.thumbnail(THUMB_MAX_EDGE, THUMB_MAX_EDGE);
-    let orig_bytes = encode_png(img)?;
-    let thumb_bytes = encode_png(&thumb)?;
+
+    // Only the original carries the watermark: a thumbnail this small
+    // (THUMB_MAX_EDGE) has nowhere near enough pixels for the payload to
+    // survive being meaningful, and it isn't the copy anyone would trace
+    // provenance from anyway.
+    let watermarked = crate::watermark::embed(img, format!("{WATERMARK_PREFIX}{id}").as_bytes());
+
+    let meta = PngMeta {
+        title,
+        uploader_name,
+        page_url: &page_url,
+    };
+    let orig_bytes = encode_png(&watermarked, &meta)?;
+    let thumb_bytes = encode_png(&thumb, &meta)?;
 
     let be = backend();
     let (ok, tk) = (orig_key(&id), thumb_key(&id));
@@ -156,10 +190,39 @@ pub async fn store(img: &DynamicImage) -> anyhow::Result<Stored> {
     })
 }
 
-fn encode_png(img: &DynamicImage) -> anyhow::Result<Vec<u8>> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buf, image::ImageFormat::Png)?;
-    Ok(buf.into_inner())
+struct PngMeta<'a> {
+    title: &'a str,
+    uploader_name: Option<&'a str>,
+    page_url: &'a str,
+}
+
+/// Encodes via the `png` crate directly rather than `DynamicImage::write_to`:
+/// `image`'s generic encoder has no way to attach text chunks, and provenance
+/// metadata is the whole point of this function. `iTXt`, not `tEXt`: titles
+/// are free text and can contain characters `tEXt`'s Latin-1 encoding can't
+/// represent.
+fn encode_png(img: &DynamicImage, meta: &PngMeta) -> anyhow::Result<Vec<u8>> {
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    let mut buf = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut buf, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.add_itxt_chunk("Title".to_string(), meta.title.to_string())?;
+        encoder.add_itxt_chunk(
+            "Software".to_string(),
+            "son collection (soncollection.com)".to_string(),
+        )?;
+        encoder.add_itxt_chunk("Description".to_string(), meta.page_url.to_string())?;
+        if let Some(author) = meta.uploader_name {
+            encoder.add_itxt_chunk("Author".to_string(), author.to_string())?;
+        }
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(rgba.as_raw())?;
+    }
+    Ok(buf)
 }
 
 /// Delete both objects for a son.
