@@ -33,6 +33,10 @@ tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"], optional = true }
 image = { version = "0.25", optional = true }
+async-trait = { version = "0.1", optional = true }
+# Only the S3 client; the Config is built by hand from env vars, so aws-config
+# and its credential-chain machinery are not needed.
+aws-sdk-s3 = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
 anyhow = { version = "1", optional = true }
@@ -60,6 +64,8 @@ ssr = [
   "dep:tower-http",
   "dep:sqlx",
   "dep:image",
+  "dep:async-trait",
+  "dep:aws-sdk-s3",
   "dep:uuid",
   "dep:chrono",
   "dep:anyhow",

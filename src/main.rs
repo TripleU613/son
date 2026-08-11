@@ -28,6 +28,12 @@ async fn main() -> anyhow::Result<()> {
     soncollection::db::set_pool(db);
     tracing::info!("database ready at {db_url} ({existing} sons collected)");
 
+    // R2 when configured, local disk otherwise. Logged either way so it is never
+    // a mystery which one served a given upload.
+    let storage = soncollection::storage::backend_from_env().await;
+    tracing::info!("storage backend: {}", storage.name());
+    soncollection::storage::set_backend(storage);
+
     let moderator: Box<dyn Moderator> = Box::new(StubModerator);
     if moderator.name().contains("NO REAL MODERATION") {
         tracing::warn!(
