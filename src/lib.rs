@@ -4,6 +4,8 @@ pub mod components;
 pub mod models;
 
 #[cfg(feature = "ssr")]
+pub mod d1;
+#[cfg(feature = "ssr")]
 pub mod db;
 #[cfg(feature = "ssr")]
 pub mod moderation;

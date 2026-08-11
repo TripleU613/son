@@ -117,20 +117,17 @@ pub async fn upload(mut mp: Multipart) -> impl IntoResponse {
 
     let title = clean_title(&title);
 
-    let son = crate::db::insert(
-        crate::db::pool(),
-        crate::db::NewSon {
-            id: &stored.id,
-            title: &title,
-            orig_url: &stored.orig_url,
-            thumb_url: &stored.thumb_url,
-            width: stored.width,
-            height: stored.height,
-            son_score: verdict.son_score,
-            nsfw_score: verdict.nsfw_score,
-            embedding: verdict.embedding.as_deref(),
-        },
-    )
+    let son = crate::db::insert(crate::db::NewSon {
+        id: &stored.id,
+        title: &title,
+        orig_url: &stored.orig_url,
+        thumb_url: &stored.thumb_url,
+        width: stored.width,
+        height: stored.height,
+        son_score: verdict.son_score,
+        nsfw_score: verdict.nsfw_score,
+        embedding: verdict.embedding.as_deref(),
+    })
     .await;
 
     match son {

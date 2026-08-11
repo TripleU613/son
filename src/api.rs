@@ -74,7 +74,7 @@ pub async fn list_sons(
         .unwrap_or_default();
     let voter = current_voter().await;
 
-    crate::db::list_public(crate::db::pool(), cursor.as_deref(), sort, voter.as_deref())
+    crate::db::list_public(cursor.as_deref(), sort, voter.as_deref())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -82,7 +82,7 @@ pub async fn list_sons(
 #[server(GetSon, "/api")]
 pub async fn get_son(id: String) -> Result<Option<Son>, ServerFnError> {
     let voter = current_voter().await;
-    let son = crate::db::get(crate::db::pool(), &id, voter.as_deref())
+    let son = crate::db::get(&id, voter.as_deref())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -94,7 +94,7 @@ pub async fn get_son(id: String) -> Result<Option<Son>, ServerFnError> {
 
 #[server(TotalSons, "/api")]
 pub async fn total_sons() -> Result<i64, ServerFnError> {
-    crate::db::count_public(crate::db::pool())
+    crate::db::count_public()
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -110,7 +110,7 @@ pub async fn like_son(id: String) -> Result<(i64, bool), ServerFnError> {
         None => issue_voter(),
     };
 
-    crate::db::toggle_like(crate::db::pool(), &id, &voter)
+    crate::db::toggle_like(&id, &voter)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -120,7 +120,7 @@ pub async fn like_son(id: String) -> Result<(i64, bool), ServerFnError> {
 /// anything. At `AUTO_HIDE_REPORTS` the son hides itself.
 #[server(ReportSon, "/api")]
 pub async fn report_son(id: String) -> Result<(), ServerFnError> {
-    crate::db::report(crate::db::pool(), &id)
+    crate::db::report(&id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

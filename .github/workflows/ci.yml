@@ -53,8 +53,9 @@ jobs:
       - name: install cargo-leptos
         run: cargo install cargo-leptos --locked
 
-      # No DATABASE_URL on purpose. Queries are runtime-checked rather than
-      # using sqlx::query!, so a fresh clone builds with no database present.
+      # No D1/R2 credentials here on purpose: the app talks to them entirely
+      # over HTTP at runtime (no query! macros, no compile-time schema check),
+      # so a plain build needs no secrets and a fresh clone builds identically.
       - name: build release
         run: cargo leptos build --release
 
@@ -65,3 +66,94 @@ jobs:
             target/release/soncollection
             target/site
           retention-days: 7
+
+  # Builds the production image and deploys it to bulky-server. Only runs for
+  # pushes to main (never for pull_request, including from forks) -- that
+  # trigger has no access to secrets, and this job needs several.
+  deploy:
+    needs: [check, build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build and push image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # bulky-server has no public inbound port at all -- it is reachable only
+      # over this tailnet, the same way this runner reaches it to deploy.
+      - uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          tags: tag:ci
+
+      - name: pin bulky-server's host key
+        # Fetched once out-of-band and committed below rather than trusting
+        # whatever answers on the IP at deploy time (TOFU inside an automated
+        # pipeline is exactly the case host-key checking exists to prevent).
+        run: |
+          mkdir -p ~/.ssh
+          cat deploy/known_hosts >> ~/.ssh/known_hosts
+
+      - name: deploy
+        # bulky-server has Tailscale SSH enabled: the connecting node's tailnet
+        # identity IS the credential (see tailnet ACL's "ssh" section), not a
+        # keypair -- so no private key is loaded here, only the host-key pin
+        # above and this runner's own tag:ci membership from the step before.
+        env:
+          SON_IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          CF_D1_API_TOKEN: ${{ secrets.CF_D1_API_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+        run: |
+          scp docker-compose.yml root@bulky-server:/opt/son/docker-compose.yml
+          ssh root@bulky-server \
+            "SON_IMAGE='$SON_IMAGE' \
+             CF_ACCOUNT_ID='$CF_ACCOUNT_ID' \
+             CF_D1_DATABASE_ID='$CF_D1_DATABASE_ID' \
+             CF_D1_API_TOKEN='$CF_D1_API_TOKEN' \
+             R2_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID' \
+             R2_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY' \
+             R2_BUCKET='$R2_BUCKET' \
+             R2_PUBLIC_BASE='$R2_PUBLIC_BASE' \
+             CF_TUNNEL_TOKEN='$CF_TUNNEL_TOKEN' \
+             docker compose -f /opt/son/docker-compose.yml pull && \
+             SON_IMAGE='$SON_IMAGE' \
+             CF_ACCOUNT_ID='$CF_ACCOUNT_ID' \
+             CF_D1_DATABASE_ID='$CF_D1_DATABASE_ID' \
+             CF_D1_API_TOKEN='$CF_D1_API_TOKEN' \
+             R2_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID' \
+             R2_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY' \
+             R2_BUCKET='$R2_BUCKET' \
+             R2_PUBLIC_BASE='$R2_PUBLIC_BASE' \
+             CF_TUNNEL_TOKEN='$CF_TUNNEL_TOKEN' \
+             docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"
+      # No secret value is ever written to a file on bulky-server: each is a
+      # shell-local env var for exactly the two commands above, passed
+      # straight through to docker compose's own ${VAR} interpolation, and
+      # gone once this SSH session ends.

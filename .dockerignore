@@ -1,0 +1,18 @@
+# Never send secrets or local state into the build context. Docker sends
+# everything not listed here to the daemon before the first instruction even
+# runs, so this matters even for files no COPY ever references.
+.env
+.env.*
+!.env.example
+sons.db*
+uploads/
+
+# 605MB of local model weights: the image fetches its own copy during build
+# (see Dockerfile) rather than depending on whatever happens to be on disk
+# here, so a fresh clone builds identically.
+models/
+
+target/
+.git/
+.github/
+*.md

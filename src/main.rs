@@ -15,16 +15,18 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://sons.db".into());
-    let db = soncollection::db::connect(&db_url).await?;
-    let existing = soncollection::db::count_public(&db).await.unwrap_or(0);
-    soncollection::db::set_pool(db);
-    tracing::info!("database ready at {db_url} ({existing} sons collected)");
+    // D1 only — no local database. Local dev talks to the same D1 database as
+    // production rather than falling back to a divergent local store, so there
+    // is exactly one code path to trust (see db.rs).
+    let d1 = soncollection::d1::D1::from_env()
+        .map_err(|e| anyhow::anyhow!("D1 is not configured: {e}"))?;
+    soncollection::db::set_client(d1);
+    let existing = soncollection::db::count_public().await?;
+    tracing::info!("database ready (D1): {existing} sons collected");
 
     // R2 when configured, local disk otherwise. Logged either way so it is never
     // a mystery which one served a given upload.

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One son. Shared verbatim between the server and the wasm bundle, so this
-/// struct must not name any ssr-only type (no chrono, no sqlx) — timestamps
+/// struct must not name any ssr-only type (no chrono, no reqwest) — timestamps
 /// travel as RFC3339 strings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Son {

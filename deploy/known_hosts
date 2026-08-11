@@ -1,0 +1,9 @@
+# bulky-server's SSH host key, fetched 2026-08-11 via
+# ssh-keyscan -t ed25519 100.88.11.83
+# This is public information (a host key is meant to be shared), pinned here
+# so the CI deploy step verifies it rather than trusting whatever answers on
+# the tailnet at deploy time. Re-fetch and update if bulky-server's Tailscale
+# SSH host key ever legitimately rotates.
+100.88.11.83 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
+bulky-server ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
+bulky-server.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
