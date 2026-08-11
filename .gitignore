@@ -5,3 +5,4 @@
 !/uploads/thumb/.gitkeep
 sons.db*
 .env
+/models

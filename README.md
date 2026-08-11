@@ -13,7 +13,8 @@ Pure Rust, front to back.
 | Server     | Axum 0.8 | What `leptos_axum` runs on anyway |
 | DB         | SQLite via `sqlx` 0.8 | Zero ops, WAL for concurrent reads during uploads. Runtime-checked queries so a fresh clone builds without a live DB |
 | Images     | `image` 0.25 | Decode, bound, thumbnail |
-| Moderation | trait `Moderator` | **Currently a stub — see below** |
+| Moderation | CLIP ViT-B/32 via `candle` | Pure Rust, CPU. One pass gives NSFW score, son score, and the embedding |
+| Storage    | Cloudflare R2 (local disk in dev) | Behind a `Backend` trait; images served from media.soncollection.com, not proxied |
 
 ## Running it
 
@@ -52,32 +53,77 @@ src/
   api.rs            #[server] fns — gallery reads, report
   upload_route.rs   POST /api/upload (plain Axum: multipart)
   db.rs             SQLite, keyset pagination
-  storage.rs        decode → bound → thumbnail → disk
-  moderation/       Moderator trait + stub
+  storage.rs        decode → bound → thumbnail → Backend (local | r2)
+  moderation/       Moderator trait: clip | stub | deny
   models.rs         types shared by server and wasm
   components/       gallery, card, detail, upload
 ```
 
-## Moderation: read this before deploying
+## Moderation
 
 The site **auto-publishes anything that clears the thresholds.** There is no
-review queue. Right now the only classifier is `moderation::stub`, which:
+review queue, so `src/moderation/` is the only thing between an upload and the
+front page.
 
-- does **not** detect NSFW content
-- does **not** detect sons
+The real classifier is **CLIP ViT-B/32 running on CPU through
+[`candle`](https://github.com/huggingface/candle)** — pure Rust, no ONNX C++
+dependency. One image forward pass answers both questions and yields the
+embedding, which is why CLIP was chosen over a dedicated NSFW model.
 
-It checks aspect ratio and minimum dimensions, and passes everything else with
-`nsfw_score: 0.0`. The server logs a warning at startup saying so.
+Scoring is **contrastive, not absolute**. A raw cosine similarity to "porn"
+means nothing on its own, so each question is a softmax over competing captions
+and the score is the probability mass on the positive ones.
 
-**Do not put this on the public internet as-is.** The intended replacement is
-CLIP via [`candle`](https://github.com/huggingface/candle) (pure Rust, no C++
-ONNX dependency), scoring each upload zero-shot against two prompt sets:
+That detail matters. The first version used four benign captions and **a plain
+yellow square scored 0.57 NSFW** — images resembling no benign caption had
+nowhere to put their probability mass. The benign caption list is now
+deliberately much longer than the explicit one. Measured after the fix:
 
-- NSFW prompts → `nsfw_score`
-- `"the Anthony Mackie Son meme"`, `"a sunflower"`, … → `son_score`
+| image | son | nsfw |
+| --- | --- | --- |
+| meme (caption + face) | 0.999 | 0.062 |
+| plain colour square | 0.007 | 0.009 |
+| spreadsheet screenshot | 0.002 | 0.033 |
+| outdoor scene | 0.003 | 0.006 |
+| advertising banner | 0.019 | 0.017 |
+| random noise | 0.000 | 0.002 |
 
-Implement `Moderator` in `src/moderation/clip.rs` and swap the one line in
-`main.rs`. Nothing else changes.
+**If you add or reorder captions, re-run those numbers.** `NSFW_POSITIVE` and
+`SON_POSITIVE` are counts of leading entries, so inserting a caption in the
+wrong place silently reclassifies it.
+
+### What has NOT been verified
+
+The table above only shows **false positives** — safe images are not being
+flagged. Nobody has tested this against actual explicit content, so the
+**false-negative rate is unknown**: whether real NSFW material trips
+`NSFW_MAX = 0.5` is unmeasured. Treat the NSFW gate as unproven until it is
+evaluated against a real benchmark.
+
+### Backends
+
+`MODERATION_BACKEND` selects: `clip` (default), `stub`, `deny`.
+
+If CLIP fails to load, the app falls back to **`deny`, not `stub`** — every
+upload is refused while the gallery keeps serving. A model-loading failure must
+not become an open door. `stub` detects nothing and has to be asked for by name.
+
+### Weights
+
+`CLIP_MODEL_DIR` (default `models/clip-vit-base-patch32`) is checked first;
+`hf-hub` downloads from `openai/clip-vit-base-patch32` only as a dev
+convenience. Production should ship the weights, not fetch 600MB at boot.
+
+That repo publishes **no safetensors** — only `pytorch_model.bin`, loaded via
+`VarBuilder::from_pth`. Preferred over a third-party safetensors mirror for a
+file that decides what gets published.
+
+```bash
+mkdir -p models/clip-vit-base-patch32 && cd $_
+for f in pytorch_model.bin tokenizer.json; do
+  curl -sLO "https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/$f"
+done
+```
 
 ### Why every upload stores an embedding
 
@@ -94,8 +140,10 @@ rather hold uploads for review instead, it's one branch in `upload_route::upload
 
 ## Not built yet
 
-- CLIP moderation (above)
+- Evaluating the NSFW gate against a real benchmark (see above)
 - Perceptual-hash dedupe on repost (`img_hash`)
 - Admin view for the report queue
-- S3/R2 storage — swap `storage::store`, it's the only place that touches disk
+- Google sign-in — needs an OAuth 2.0 Web Client ID; a service account cannot
+  do user login
+- Similarity search over the stored embeddings
 - The generator

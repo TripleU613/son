@@ -10,8 +10,6 @@ async fn main() -> anyhow::Result<()> {
     use tower_http::services::ServeDir;
 
     use soncollection::app::{shell, App};
-    use soncollection::moderation::stub::StubModerator;
-    use soncollection::moderation::Moderator;
 
     let _ = dotenvy::dotenv();
 
@@ -34,14 +32,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("storage backend: {}", storage.name());
     soncollection::storage::set_backend(storage);
 
-    let moderator: Box<dyn Moderator> = Box::new(StubModerator);
-    if moderator.name().contains("NO REAL MODERATION") {
-        tracing::warn!(
-            "moderation backend is {} — uploads are auto-published with only \
-             structural checks. Do not expose this publicly until CLIP is wired in.",
-            moderator.name()
-        );
-    }
+    // Loading CLIP downloads ~600MB on a cold cache and takes a few seconds
+    // warm, so it happens here rather than on a request path. Blocking, hence
+    // spawn_blocking to keep the runtime free.
+    let moderator = tokio::task::spawn_blocking(soncollection::moderation::from_env).await?;
+    tracing::info!("moderation: {}", moderator.name());
     soncollection::upload_route::set_moderator(moderator);
 
     // cargo-leptos supplies site-addr and site-root through Cargo.toml metadata.

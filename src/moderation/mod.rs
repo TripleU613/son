@@ -13,7 +13,43 @@
 
 use image::DynamicImage;
 
+pub mod clip;
+pub mod deny;
 pub mod stub;
+
+/// Choose a classifier from `MODERATION_BACKEND` (`clip` | `stub` | `deny`).
+///
+/// Defaults to `clip`. If CLIP cannot load, this returns `DenyAll` rather than
+/// the stub: a model-loading failure must not become an open door on a site that
+/// auto-publishes. Selecting `stub` requires saying so explicitly.
+pub fn from_env() -> Box<dyn Moderator> {
+    match std::env::var("MODERATION_BACKEND")
+        .as_deref()
+        .unwrap_or("clip")
+    {
+        "stub" => {
+            tracing::warn!(
+                "MODERATION_BACKEND=stub — uploads are auto-published with only \
+                 structural checks. Never run this in production."
+            );
+            Box::new(stub::StubModerator)
+        }
+        "deny" => Box::new(deny::DenyAll),
+        _ => match clip::ClipModerator::load() {
+            Ok(m) => {
+                tracing::info!("moderation backend: {}", m.name());
+                Box::new(m)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "CLIP failed to load ({e}); refusing all uploads. The gallery \
+                     still serves. Set MODERATION_BACKEND=stub only for local work."
+                );
+                Box::new(deny::DenyAll)
+            }
+        },
+    }
+}
 
 /// Reject anything at or above this NSFW confidence.
 pub const NSFW_MAX: f32 = 0.5;

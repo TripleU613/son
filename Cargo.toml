@@ -37,6 +37,17 @@ async-trait = { version = "0.1", optional = true }
 # Only the S3 client; the Config is built by hand from env vars, so aws-config
 # and its credential-chain machinery are not needed.
 aws-sdk-s3 = { version = "1", optional = true }
+# CLIP moderation. Pure Rust (candle rather than the ONNX Runtime C++ bindings),
+# CPU inference, weights cached under ~/.cache/huggingface after first run.
+candle-core = { version = "0.11", optional = true }
+candle-nn = { version = "0.11", optional = true }
+candle-transformers = { version = "0.11", optional = true }
+tokenizers = { version = "0.23", optional = true }
+# 0.4, not 1.0: the 1.0 rewrite replaced the whole surface (reqwest client,
+# no api::sync). 0.4's blocking ureq API is what candle's own examples use.
+hf-hub = { version = "0.4", default-features = false, features = [
+  "ureq", "rustls-tls",
+], optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
 anyhow = { version = "1", optional = true }
@@ -66,6 +77,11 @@ ssr = [
   "dep:image",
   "dep:async-trait",
   "dep:aws-sdk-s3",
+  "dep:candle-core",
+  "dep:candle-nn",
+  "dep:candle-transformers",
+  "dep:tokenizers",
+  "dep:hf-hub",
   "dep:uuid",
   "dep:chrono",
   "dep:anyhow",
