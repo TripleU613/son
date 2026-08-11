@@ -57,7 +57,9 @@ a { color: inherit; text-decoration: none; }
 
 .nav-links {
   display: flex;
-  gap: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
   font-size: 0.95rem;
   color: var(--ink-dim);
 
@@ -81,8 +83,48 @@ a { color: inherit; text-decoration: none; }
 /* ---------- grid ---------- */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 18px;
+}
+
+/* Density presets (see components::density). Cozy matches the original,
+   fixed layout; compact and list are opt-in via the toggle. */
+.grid--compact { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.grid--cozy { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+
+.grid--list {
+  grid-template-columns: 1fr;
+  gap: 10px;
+
+  .card { flex-direction: row; align-items: center; }
+  .card-link { flex-direction: row; align-items: center; flex: 1; min-width: 0; }
+  .card-frame { width: 84px; height: 84px; flex: none; aspect-ratio: unset !important; }
+  .card-meta { flex: 1; min-width: 0; }
+  .card-foot { padding: 0 12px 0 0; flex-direction: row; align-items: center; gap: 12px; }
+}
+
+.density-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+
+  button {
+    padding: 7px 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 120ms ease, color 120ms ease;
+
+    &:hover { color: var(--ink); }
+
+    &.active {
+      background: var(--surface-2);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+  }
 }
 
 .grid-skeleton,
@@ -90,6 +132,57 @@ a { color: inherit; text-decoration: none; }
   padding: 60px 0;
   color: var(--ink-dim);
   text-align: center;
+}
+
+/* Shimmering placeholder cards, matching the real grid's shape so nothing
+   jumps once real cards replace them. */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-card {
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.skeleton-thumb,
+.skeleton-line {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-thumb { aspect-ratio: 4 / 3; }
+
+.skeleton-line {
+  height: 14px;
+  margin: 12px;
+  border-radius: 4px;
+}
+
+/* Zero-size on purpose: exists only so an IntersectionObserver has something
+   to watch a little above the fold, not to occupy any visual space. */
+.scroll-sentinel { height: 1px; }
+
+/* Cards fade/rise in as they mount, staggered slightly by grid position so a
+   full page of results doesn't pop in as one flat block. Skipped for anyone
+   who's said they don't want motion. */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card {
+    animation: card-in 260ms ease both;
+  }
+
+  @for $i from 1 through 12 {
+    .grid > .card:nth-child(#{$i}) { animation-delay: $i * 20ms; }
+  }
 }
 
 .card {
@@ -151,8 +244,10 @@ a { color: inherit; text-decoration: none; }
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  transition: transform 100ms ease;
 
   &:disabled { opacity: 0.55; cursor: progress; }
+  &:not(:disabled):active { transform: scale(0.96); }
 }
 
 .btn-quiet {
@@ -164,8 +259,10 @@ a { color: inherit; text-decoration: none; }
   font: inherit;
   font-size: 0.85rem;
   cursor: pointer;
+  transition: transform 100ms ease, color 120ms ease, border-color 120ms ease;
 
   &:hover { color: var(--danger); border-color: var(--danger); }
+  &:active { transform: scale(0.96); }
 }
 
 .more { padding: 36px 0; text-align: center; }
@@ -310,6 +407,8 @@ a { color: inherit; text-decoration: none; }
 /* ---------- sort bar ---------- */
 .sortbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   padding: 0 0 18px;
 
@@ -347,9 +446,10 @@ a { color: inherit; text-decoration: none; }
   font: inherit;
   font-size: 0.9rem;
   cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease;
+  transition: border-color 120ms ease, color 120ms ease, transform 100ms ease;
 
   &:hover { border-color: var(--accent); color: var(--ink); }
+  &:active { transform: scale(0.94); }
 
   &.liked {
     border-color: var(--accent);
@@ -588,6 +688,8 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+
+  @media (max-width: 480px) { flex-direction: column; }
 }
 
 .admin-thumb {

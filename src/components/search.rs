@@ -4,6 +4,7 @@ use leptos_router::hooks::use_query_map;
 
 use crate::api::search_sons;
 use crate::components::card::SonCard;
+use crate::components::density::GridSkeleton;
 
 /// `/search?q=...` — full-text results via `sons_fts` (see the migration).
 /// Not paginated: a search box is a "find the one I mean" tool for a gallery
@@ -37,7 +38,7 @@ pub fn SearchPage() -> impl IntoView {
             <p>{move || if q().is_empty() { "Type something in the box above.".to_string() } else { format!("Results for \"{}\"", q()) }}</p>
         </section>
 
-        <Suspense fallback=|| view! { <div class="grid-skeleton">"searching…"</div> }>
+        <Suspense fallback=|| view! { <GridSkeleton count=4/> }>
             {move || {
                 results
                     .get()

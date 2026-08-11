@@ -19,10 +19,12 @@ serde = { version = "1", features = ["derive"] }
 # Not pinned exactly: an `=` pin here is what forced Cargo to backtrack leptos
 # to an older lib than its macro. cargo-leptos fetches a matching CLI itself.
 wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 gloo-net = { version = "0.6", features = ["http"], optional = true }
 web-sys = { version = "0.3", features = [
   "File", "FileList", "FormData", "Blob", "Url", "HtmlInputElement",
+  "IntersectionObserver", "IntersectionObserverInit", "IntersectionObserverEntry",
 ], optional = true }
 
 # --- ssr-only (server) ---
@@ -79,6 +81,7 @@ default = ["ssr"]
 hydrate = [
   "leptos/hydrate",
   "dep:wasm-bindgen",
+  "dep:js-sys",
   "dep:console_error_panic_hook",
   "dep:gloo-net",
   "dep:web-sys",

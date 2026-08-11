@@ -3,6 +3,8 @@ use leptos_meta::{Link, Meta, Title};
 
 use crate::api::{list_sons, son_of_the_day};
 use crate::components::card::SonCard;
+use crate::components::density::{Density, DensityToggle, GridSkeleton};
+use crate::components::infinite_scroll::ScrollSentinel;
 use crate::models::{Son, Sort};
 use crate::seo::absolute;
 
@@ -49,6 +51,7 @@ pub fn Gallery() -> impl IntoView {
     });
 
     let loading = load_more.pending();
+    let (density, set_density) = signal(Density::default());
 
     // Switching sort invalidates everything accumulated under the old order.
     let choose = move |s: Sort| {
@@ -94,9 +97,10 @@ pub fn Gallery() -> impl IntoView {
             >
                 "sun level"
             </button>
+            <DensityToggle density=density set_density=set_density/>
         </div>
 
-        <Suspense fallback=|| view! { <div class="grid-skeleton">"gathering sons…"</div> }>
+        <Suspense fallback=|| view! { <GridSkeleton/> }>
             {move || {
                 first
                     .get()
@@ -127,7 +131,7 @@ pub fn Gallery() -> impl IntoView {
                             }
 
                             view! {
-                                <div class="grid">
+                                <div class=move || density.get().grid_class()>
                                     <For
                                         each=move || page.sons.clone()
                                         key=|s| s.id.clone()
@@ -151,6 +155,14 @@ pub fn Gallery() -> impl IntoView {
                 when=move || !exhausted.get()
                 fallback=|| view! { <p class="exhausted">"That's every son. For now."</p> }
             >
+                // Fires "more sons" automatically once scrolled near, ahead of
+                // the button below -- which stays for anyone who'd rather
+                // load pages on request.
+                <ScrollSentinel on_visible=move || {
+                    if !loading.get_untracked() {
+                        load_more.dispatch(());
+                    }
+                }/>
                 <button
                     class="btn"
                     disabled=move || loading.get()

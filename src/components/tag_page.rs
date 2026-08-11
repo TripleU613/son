@@ -4,6 +4,8 @@ use leptos_router::hooks::use_params_map;
 
 use crate::api::sons_by_tag;
 use crate::components::card::SonCard;
+use crate::components::density::{Density, DensityToggle, GridSkeleton};
+use crate::components::infinite_scroll::ScrollSentinel;
 use crate::models::Son;
 use crate::seo::absolute;
 
@@ -37,6 +39,7 @@ pub fn TagPage() -> impl IntoView {
         }
     });
     let loading = load_more.pending();
+    let (density, set_density) = signal(Density::default());
 
     view! {
         <Title text=move || format!("#{} — son collection", slug())/>
@@ -53,7 +56,11 @@ pub fn TagPage() -> impl IntoView {
             <h1>"#" {slug}</h1>
         </section>
 
-        <Suspense fallback=|| view! { <div class="grid-skeleton">"gathering sons…"</div> }>
+        <div class="sortbar">
+            <DensityToggle density=density set_density=set_density/>
+        </div>
+
+        <Suspense fallback=|| view! { <GridSkeleton/> }>
             {move || {
                 first
                     .get()
@@ -77,7 +84,7 @@ pub fn TagPage() -> impl IntoView {
                             }
 
                             view! {
-                                <div class="grid">
+                                <div class=move || density.get().grid_class()>
                                     <For each=move || page.sons.clone() key=|s| s.id.clone() let:son>
                                         <SonCard son=son/>
                                     </For>
@@ -97,6 +104,11 @@ pub fn TagPage() -> impl IntoView {
                 when=move || !exhausted.get()
                 fallback=|| view! { <p class="exhausted">"That's every son with this tag."</p> }
             >
+                <ScrollSentinel on_visible=move || {
+                    if !loading.get_untracked() {
+                        load_more.dispatch(());
+                    }
+                }/>
                 <button
                     class="btn"
                     disabled=move || loading.get()
