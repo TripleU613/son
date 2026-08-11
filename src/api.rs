@@ -99,6 +99,36 @@ pub async fn total_sons() -> Result<i64, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[server(Leaderboard, "/api")]
+pub async fn leaderboard() -> Result<Vec<crate::models::LeaderboardEntry>, ServerFnError> {
+    crate::db::leaderboard(50)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(SonOfTheDay, "/api")]
+pub async fn son_of_the_day() -> Result<Option<Son>, ServerFnError> {
+    crate::db::son_of_the_day()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(SonsByTag, "/api")]
+pub async fn sons_by_tag(slug: String, cursor: Option<String>) -> Result<SonPage, ServerFnError> {
+    let voter = current_voter().await;
+    crate::db::sons_by_tag(&slug, cursor.as_deref(), voter.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(SearchSons, "/api")]
+pub async fn search_sons(query: String) -> Result<Vec<Son>, ServerFnError> {
+    let voter = current_voter().await;
+    crate::db::search_sons(&query, voter.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 /// Toggle a like. Returns `(new_count, liked_now)`.
 ///
 /// Anonymous: identity is a cookie, minted here on first use. Bypassable by
@@ -115,28 +145,93 @@ pub async fn like_son(id: String) -> Result<(i64, bool), ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// The raw Cookie header for the in-flight request. Shared by every server fn
+/// that needs to read a cookie (voter, session), so the `leptos_axum::extract`
+/// dance lives in exactly one place.
+#[cfg(feature = "ssr")]
+async fn cookie_header() -> Option<String> {
+    let headers: axum::http::HeaderMap = leptos_axum::extract().await.ok()?;
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
 /// Who, if anyone, is signed in — for the nav to show a sign-in link or an
 /// avatar. `Ok(None)` covers both "never signed in" and "Google sign-in isn't
 /// configured yet"; the nav doesn't need to tell those apart.
 #[server(CurrentUser, "/api")]
 pub async fn current_user() -> Result<Option<User>, ServerFnError> {
-    let headers: axum::http::HeaderMap = leptos_axum::extract()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok());
-    crate::auth::current_user(cookie_header)
+    crate::auth::current_user(cookie_header().await.as_deref())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// Require an admin session, for every admin-only server fn below. Checked
+/// here, not just hidden behind a UI element — a button no ordinary visitor
+/// sees is not the same thing as a request no ordinary visitor can make, and
+/// the admin route is otherwise a plain server fn like any other.
+#[cfg(feature = "ssr")]
+async fn require_admin() -> Result<User, ServerFnError> {
+    let user = crate::auth::current_user(cookie_header().await.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    match user {
+        Some(u) if u.is_admin => Ok(u),
+        _ => Err(ServerFnError::new("admin access required")),
+    }
+}
+
 /// Flag a son for review. Unauthenticated by design — the cost of a false
 /// report is one hidden meme, and requiring accounts would mean nobody reports
-/// anything. At `AUTO_HIDE_REPORTS` the son hides itself.
+/// anything. Identity is the same anonymous voter cookie likes already use, so
+/// one visitor can't spam-report the same son to force auto-hide alone.
 #[server(ReportSon, "/api")]
-pub async fn report_son(id: String) -> Result<(), ServerFnError> {
-    crate::db::report(&id)
+pub async fn report_son(
+    id: String,
+    reason: String,
+    message: Option<String>,
+) -> Result<(), ServerFnError> {
+    let voter = match current_voter().await {
+        Some(v) => v,
+        None => issue_voter(),
+    };
+    let reason = crate::models::ReportReason::from_str_or_default(&reason);
+    // A blank textarea should store as absent, not as an empty string forever
+    // shown in the queue.
+    let message = message
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+
+    crate::db::report(&id, &voter, reason.as_str(), message.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(AdminFlaggedSons, "/api")]
+pub async fn admin_flagged_sons() -> Result<Vec<crate::models::FlaggedSon>, ServerFnError> {
+    require_admin().await?;
+    crate::db::flagged_sons()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[server(AdminSetPublic, "/api")]
+pub async fn admin_set_public(id: String, public: bool) -> Result<(), ServerFnError> {
+    require_admin().await?;
+    crate::db::set_public(&id, public)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Removes the row and its R2 objects. There is no undo — the confirmation
+/// happens client-side (see the admin page), not here, since a server fn has
+/// no way to ask "are you sure" mid-request.
+#[server(AdminDeleteSon, "/api")]
+pub async fn admin_delete_son(id: String) -> Result<(), ServerFnError> {
+    require_admin().await?;
+    crate::storage::remove(&id).await;
+    crate::db::delete_son(&id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

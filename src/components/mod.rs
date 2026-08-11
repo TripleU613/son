@@ -1,5 +1,8 @@
+pub mod admin;
 pub mod card;
 pub mod detail;
 pub mod gallery;
+pub mod leaderboard;
 pub mod like;
+pub mod report;
 pub mod upload;

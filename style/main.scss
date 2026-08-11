@@ -404,3 +404,234 @@ a { color: inherit; text-decoration: none; }
 
   &:hover { color: var(--danger); }
 }
+
+/* ---------- card restructure (tag chips need their own link, so the whole
+   card can no longer be one giant anchor) ---------- */
+.card-link {
+  display: flex;
+  flex-direction: column;
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-foot {
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------- attribution ---------- */
+.card-by {
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+}
+
+/* ---------- tags ---------- */
+.card-tags,
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-tags { margin: 0 0 14px; }
+
+.tag-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  font-size: 0.75rem;
+  text-decoration: none;
+
+  &:hover { border-color: var(--accent); color: var(--accent); }
+}
+
+/* ---------- son of the day ---------- */
+.sotd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 24px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, rgba(255, 207, 61, 0.12), transparent);
+}
+
+.sotd-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex: none;
+}
+
+.sotd-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sotd-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.sotd-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- leaderboard ---------- */
+.leaderboard {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.leaderboard-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+
+.leaderboard-name { flex: 1; }
+
+.leaderboard-count {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+/* ---------- report form ---------- */
+.report-form {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  display: grid;
+  gap: 10px;
+}
+
+.report-reasons {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+
+  legend {
+    font-size: 0.85rem;
+    color: var(--ink-dim);
+    padding: 0 0 4px;
+  }
+}
+
+.report-reason {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.report-message {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+
+.report-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ---------- admin ---------- */
+.admin-queue {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-row {
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.admin-thumb {
+  width: 88px;
+  height: 88px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex: none;
+}
+
+.admin-row-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+
+  &.public { background: var(--ok); color: #06301c; }
+}
+
+.admin-reports {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.85rem;
+  color: var(--ink-dim);
+}
+
+.admin-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn-quiet.danger:hover { color: var(--danger); border-color: var(--danger); }

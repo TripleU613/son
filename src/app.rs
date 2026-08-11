@@ -5,8 +5,10 @@ use leptos_router::hooks::use_location;
 use leptos_router::{path, SsrMode};
 
 use crate::api::current_user;
+use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
+use crate::components::leaderboard::Leaderboard;
 use crate::components::upload::Upload;
 
 /// The HTML document. Server-side only entry point; `HydrationScripts` injects
@@ -49,6 +51,11 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/son/:id") view=SonDetail ssr=SsrMode::Async/>
                     // No server data; streaming is fine here.
                     <Route path=path!("/upload") view=Upload/>
+                    <Route path=path!("/leaderboard") view=Leaderboard ssr=SsrMode::Async/>
+                    // Not SsrMode::Async: it carries no SEO-relevant content
+                    // and is gated server-side in every fn it calls anyway, so
+                    // there is nothing here for out-of-order streaming to leak.
+                    <Route path=path!("/admin") view=Admin/>
                 </Routes>
             </main>
             <footer class="foot">
@@ -72,6 +79,7 @@ fn Nav() -> impl IntoView {
             <nav class="nav-links">
                 <A href="/">"gallery"</A>
                 <A href="/upload">"contribute a son"</A>
+                <A href="/leaderboard">"leaderboard"</A>
                 <Suspense fallback=|| ()>
                     {move || {
                         user.get()
@@ -79,6 +87,7 @@ fn Nav() -> impl IntoView {
                                 Ok(Some(u)) => {
                                     view! {
                                         <span class="nav-user">
+                                            {u.is_admin.then(|| view! { <A href="/admin">"admin"</A> })}
                                             {u.avatar_url.clone().map(|src| {
                                                 view! { <img class="nav-avatar" src=src alt=""/> }
                                             })}

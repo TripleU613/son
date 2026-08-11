@@ -3,8 +3,9 @@ use leptos_meta::{Meta, Title};
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 
-use crate::api::{get_son, report_son};
+use crate::api::get_son;
 use crate::components::like::LikeButton;
+use crate::components::report::ReportForm;
 
 /// Link unfurlers (Discord, Twitter, Slack) reject relative `og:image` URLs, so
 /// these must be absolute. Set `SITE_ORIGIN` (e.g. `https://soncollection.com`);
@@ -37,11 +38,6 @@ pub fn SonDetail() -> impl IntoView {
     // Blocking holds the stream until the son is known.
     let son = Resource::new_blocking(id, |id| async move { get_son(id).await });
 
-    let report = Action::new(|id: &String| {
-        let id = id.clone();
-        async move { report_son(id).await }
-    });
-
     view! {
         <Suspense fallback=|| view! { <p class="loading">"finding the son…"</p> }>
             {move || {
@@ -60,7 +56,25 @@ pub fn SonDetail() -> impl IntoView {
                                 .into_any()
                         }
                         Ok(Some(s)) => {
-                            let reported = report.value();
+                            // A plain one-time conditional, not <Show>: `when`
+                            // there expects a reactive closure for a condition
+                            // that can change after the initial render, and
+                            // tags don't change once the son has loaded --
+                            // using it anyway is what produced a real
+                            // Fn-vs-FnOnce compile error from the nested
+                            // closure capturing `tags` by move.
+                            let tag_chips = (!s.tags.is_empty()).then(|| {
+                                let tags = s.tags.clone();
+                                view! {
+                                    <div class="detail-tags">
+                                        <For each=move || tags.clone() key=|t| t.slug.clone() let:tag>
+                                            <A href=format!("/tag/{}", tag.slug) attr:class="tag-chip">
+                                                {tag.name.clone()}
+                                            </A>
+                                        </For>
+                                    </div>
+                                }
+                            });
                             view! {
                                 <Title text=format!("{} — son collection", s.title)/>
                                 <Meta property="og:title" content=s.title.clone()/>
@@ -85,6 +99,7 @@ pub fn SonDetail() -> impl IntoView {
                                                 initial_liked=s.liked_by_me
                                             />
                                         </div>
+                                        {tag_chips}
                                         <dl>
                                             <dt>"sonness"</dt>
                                             <dd>{s.sonness_label()}</dd>
@@ -92,30 +107,16 @@ pub fn SonDetail() -> impl IntoView {
                                             <dd>{format!("{}×{}", s.width, s.height)}</dd>
                                             <dt>"collected"</dt>
                                             <dd>{s.created_at.clone()}</dd>
+                                            <dt>"contributed by"</dt>
+                                            <dd>
+                                                {match &s.uploader {
+                                                    Some(u) => u.display_name.clone(),
+                                                    None => "anonymous".to_string(),
+                                                }}
+                                            </dd>
                                         </dl>
 
-                                        <Show
-                                            when=move || reported.get().is_none()
-                                            fallback=|| {
-                                                view! {
-                                                    <p class="reported">"Flagged. Someone will look."</p>
-                                                }
-                                            }
-                                        >
-                                            {
-                                                let sid = s.id.clone();
-                                                view! {
-                                                    <button
-                                                        class="btn-quiet"
-                                                        on:click=move |_| {
-                                                            report.dispatch(sid.clone());
-                                                        }
-                                                    >
-                                                        "this is not a son / report"
-                                                    </button>
-                                                }
-                                            }
-                                        </Show>
+                                        <ReportForm son_id=s.id.clone()/>
                                     </div>
                                 </article>
                             }

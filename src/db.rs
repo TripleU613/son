@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::d1::D1;
-use crate::models::{Son, SonPage, Sort, User, PAGE_SIZE};
+use crate::models::{LeaderboardEntry, Son, SonPage, Sort, Uploader, User, PAGE_SIZE};
 
 /// Process-wide client, set once at startup.
 static D1_CLIENT: std::sync::OnceLock<D1> = std::sync::OnceLock::new();
@@ -30,8 +30,13 @@ pub fn client() -> &'static D1 {
     D1_CLIENT.get().expect("D1 client not initialized")
 }
 
-const COLS: &str = "id, title, orig_url, thumb_url, width, height, \
-                    son_score, nsfw_score, created_at, is_public, reports, likes";
+// A LEFT JOIN against users, not a separate per-row query: this is the hot
+// path (every gallery page, every detail view), and joining costs nothing D1
+// doesn't already pay for a single indexed lookup.
+const SON_SELECT: &str = "SELECT s.id, s.title, s.orig_url, s.thumb_url, s.width, s.height, \
+     s.son_score, s.nsfw_score, s.created_at, s.is_public, s.reports, s.likes, \
+     u.display_name AS uploader_name, u.avatar_url AS uploader_avatar \
+     FROM sons s LEFT JOIN users u ON u.id = s.uploader_id";
 
 /// Shape of a row as D1 returns it: JSON, with SQLite's native types (no bool,
 /// no fixed-width ints/floats). Converted into `Son` below.
@@ -49,6 +54,8 @@ struct SonRow {
     is_public: i64,
     reports: i64,
     likes: i64,
+    uploader_name: Option<String>,
+    uploader_avatar: Option<String>,
 }
 
 impl From<SonRow> for Son {
@@ -66,8 +73,14 @@ impl From<SonRow> for Son {
             is_public: r.is_public != 0,
             reports: r.reports,
             likes: r.likes,
-            // Depends on who is asking; filled in by the caller.
+            // Both depend on who is asking / a follow-up query; filled in by
+            // the caller (mark_liked, attach_tags).
             liked_by_me: false,
+            tags: Vec::new(),
+            uploader: r.uploader_name.map(|display_name| Uploader {
+                display_name,
+                avatar_url: r.uploader_avatar,
+            }),
         }
     }
 }
@@ -103,9 +116,9 @@ pub async fn list_public(
     let rows: Vec<SonRow> = match sort {
         Sort::Newest => {
             let sql = format!(
-                "SELECT {COLS} FROM sons \
-                 WHERE is_public = 1 AND (?1 IS NULL OR created_at < ?1) \
-                 ORDER BY created_at DESC, id DESC \
+                "{SON_SELECT} \
+                 WHERE s.is_public = 1 AND (?1 IS NULL OR s.created_at < ?1) \
+                 ORDER BY s.created_at DESC, s.id DESC \
                  LIMIT ?2"
             );
             client()
@@ -117,10 +130,10 @@ pub async fn list_public(
                 .map(|c| decode_cursor(c, sort))
                 .unwrap_or((i64::MAX, String::new()));
             let sql = format!(
-                "SELECT {COLS} FROM sons \
-                 WHERE is_public = 1 \
-                   AND (?1 = 0 OR likes < ?2 OR (likes = ?2 AND created_at < ?3)) \
-                 ORDER BY likes DESC, created_at DESC, id DESC \
+                "{SON_SELECT} \
+                 WHERE s.is_public = 1 \
+                   AND (?1 = 0 OR s.likes < ?2 OR (s.likes = ?2 AND s.created_at < ?3)) \
+                 ORDER BY s.likes DESC, s.created_at DESC, s.id DESC \
                  LIMIT ?4"
             );
             client()
@@ -151,6 +164,7 @@ pub async fn list_public(
     };
 
     mark_liked(&mut sons, voter).await?;
+    attach_tags_to(&mut sons).await?;
     Ok(SonPage { sons, next_cursor })
 }
 
@@ -188,7 +202,7 @@ async fn mark_liked(sons: &mut [Son], voter: Option<&str>) -> anyhow::Result<()>
 }
 
 pub async fn get(id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
-    let sql = format!("SELECT {COLS} FROM sons WHERE id = ?1");
+    let sql = format!("{SON_SELECT} WHERE s.id = ?1");
     let rows: Vec<SonRow> = client().query(&sql, vec![json!(id)]).await?;
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);
@@ -209,6 +223,9 @@ pub async fn get(id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
             .await?;
         son.liked_by_me = !hit.is_empty();
     }
+    let mut one = [son];
+    attach_tags_to(&mut one).await?;
+    let [son] = one;
     Ok(Some(son))
 }
 
@@ -224,9 +241,15 @@ pub struct NewSon<'a> {
     pub embedding: Option<&'a [f32]>,
     /// Who uploaded this, if they were signed in. `None` for an anonymous
     /// upload — still fully supported; accounts are additive, not a gate.
-    /// Not yet surfaced anywhere (attribution UI is a later phase); stored now
-    /// so that later phase has real data instead of starting from a gap.
     pub uploader_id: Option<&'a str>,
+    /// Display info for the same uploader, so the row handed straight back to
+    /// the caller after insert already shows attribution correctly, without
+    /// an extra round trip to re-fetch what the caller already had in hand.
+    pub uploader: Option<Uploader>,
+    /// Attached by the caller after linking `son_tags`, for the same reason
+    /// as `uploader`: the immediate response should already show what was
+    /// just attached, not wait for the next page load.
+    pub tags: Vec<crate::models::Tag>,
 }
 
 pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
@@ -275,25 +298,57 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
         reports: 0,
         likes: 0,
         liked_by_me: false,
+        uploader: new.uploader,
+        tags: new.tags,
     })
+}
+
+/// Record a report and recompute `sons.reports` from `COUNT(*)`, the same
+/// self-healing pattern as `sons.likes` — a drift-proof counter beats an
+/// incremented one given D1's lack of cross-call transactions (see `d1.rs`).
+///
+/// One report per voter per son (`reports`'s primary key): a repeat report
+/// from the same voter is silently a no-op, so a single visitor cannot force
+/// auto-hide alone by resubmitting.
+pub async fn report(
+    son_id: &str,
+    voter: &str,
+    reason: &str,
+    message: Option<&str>,
+) -> anyhow::Result<()> {
+    client()
+        .exec(
+            "INSERT INTO reports (son_id, voter_id, reason, message, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT (son_id, voter_id) DO NOTHING",
+            vec![
+                json!(son_id),
+                json!(voter),
+                json!(reason),
+                json!(message),
+                json!(chrono::Utc::now().to_rfc3339()),
+            ],
+        )
+        .await?;
+
+    client()
+        .exec(
+            "UPDATE sons \
+             SET reports = (SELECT COUNT(*) FROM reports WHERE son_id = sons.id), \
+                 is_public = CASE \
+                     WHEN (SELECT COUNT(*) FROM reports WHERE son_id = sons.id) >= ?2 \
+                     THEN 0 ELSE is_public \
+                 END \
+             WHERE id = ?1",
+            vec![json!(son_id), json!(AUTO_HIDE_REPORTS)],
+        )
+        .await?;
+    Ok(())
 }
 
 /// Flag a son. At `AUTO_HIDE_REPORTS` it pulls itself from the gallery — the
 /// safety valve that makes auto-publishing survivable without a review queue.
 pub const AUTO_HIDE_REPORTS: i64 = 3;
-
-pub async fn report(id: &str) -> anyhow::Result<()> {
-    client()
-        .exec(
-            "UPDATE sons \
-             SET reports = reports + 1, \
-                 is_public = CASE WHEN reports + 1 >= ?2 THEN 0 ELSE is_public END \
-             WHERE id = ?1",
-            vec![json!(id), json!(AUTO_HIDE_REPORTS)],
-        )
-        .await?;
-    Ok(())
-}
 
 pub async fn set_public(id: &str, public: bool) -> anyhow::Result<()> {
     client()
@@ -303,6 +358,78 @@ pub async fn set_public(id: &str, public: bool) -> anyhow::Result<()> {
         )
         .await?;
     Ok(())
+}
+
+/// Delete a son's row and its reports/likes (both `ON DELETE CASCADE`, though
+/// D1's HTTP API executes each statement without a guarantee that
+/// `PRAGMA foreign_keys` is on for it, so the cascades are not solely relied
+/// on — both child tables are cleared explicitly first).
+pub async fn delete_son(id: &str) -> anyhow::Result<()> {
+    client()
+        .exec("DELETE FROM reports WHERE son_id = ?1", vec![json!(id)])
+        .await?;
+    client()
+        .exec("DELETE FROM likes WHERE son_id = ?1", vec![json!(id)])
+        .await?;
+    client()
+        .exec("DELETE FROM sons WHERE id = ?1", vec![json!(id)])
+        .await?;
+    Ok(())
+}
+
+/// Every son with at least one report, each with its full report history —
+/// the admin queue's unit of review. Two queries, not N+1: one for the sons,
+/// one for every report against any of them.
+pub async fn flagged_sons() -> anyhow::Result<Vec<crate::models::FlaggedSon>> {
+    use crate::models::{FlaggedSon, ReportDetail};
+
+    let sql =
+        format!("{SON_SELECT} WHERE s.reports > 0 ORDER BY s.reports DESC, s.created_at DESC");
+    let sons: Vec<Son> = client()
+        .query::<SonRow>(&sql, vec![])
+        .await?
+        .into_iter()
+        .map(Son::from)
+        .collect();
+    if sons.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let holes = (0..sons.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql2 =
+        format!("SELECT son_id, reason, message, created_at FROM reports WHERE son_id IN ({holes}) ORDER BY created_at DESC");
+
+    #[derive(Deserialize)]
+    struct Row {
+        son_id: String,
+        reason: String,
+        message: Option<String>,
+        created_at: String,
+    }
+    let rows: Vec<Row> = client()
+        .query(&sql2, sons.iter().map(|s| json!(s.id)).collect())
+        .await?;
+
+    let mut by_son: std::collections::HashMap<String, Vec<ReportDetail>> =
+        std::collections::HashMap::new();
+    for r in rows {
+        by_son.entry(r.son_id).or_default().push(ReportDetail {
+            reason: r.reason,
+            message: r.message,
+            created_at: r.created_at,
+        });
+    }
+
+    Ok(sons
+        .into_iter()
+        .map(|son| {
+            let reports = by_son.remove(&son.id).unwrap_or_default();
+            FlaggedSon { son, reports }
+        })
+        .collect())
 }
 
 pub async fn count_public() -> anyhow::Result<i64> {
@@ -456,4 +583,251 @@ pub async fn upsert_user(
         .next()
         .map(User::from)
         .ok_or_else(|| anyhow::anyhow!("upsert_user: RETURNING produced no row"))
+}
+
+/// Ranked by upload count among accounts with at least one public upload —
+/// an account that has never uploaded doesn't clutter a leaderboard entry at
+/// zero.
+pub async fn leaderboard(limit: i64) -> anyhow::Result<Vec<LeaderboardEntry>> {
+    #[derive(Deserialize)]
+    struct Row {
+        display_name: String,
+        avatar_url: Option<String>,
+        upload_count: i64,
+    }
+    let rows: Vec<Row> = client()
+        .query(
+            "SELECT u.display_name, u.avatar_url, COUNT(*) AS upload_count \
+             FROM sons s JOIN users u ON u.id = s.uploader_id \
+             WHERE s.is_public = 1 \
+             GROUP BY u.id \
+             ORDER BY upload_count DESC, u.display_name ASC \
+             LIMIT ?1",
+            vec![json!(limit)],
+        )
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| LeaderboardEntry {
+            display_name: r.display_name,
+            avatar_url: r.avatar_url,
+            upload_count: r.upload_count,
+        })
+        .collect())
+}
+
+/// The most-liked son uploaded in the last 24 hours, falling back to the
+/// most-liked public son overall when nothing new has landed recently — a
+/// quiet day shouldn't mean the homepage's featured slot goes empty.
+pub async fn son_of_the_day() -> anyhow::Result<Option<Son>> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+
+    let recent_sql = format!(
+        "{SON_SELECT} \
+         WHERE s.is_public = 1 AND s.created_at >= ?1 \
+         ORDER BY s.likes DESC, s.created_at DESC \
+         LIMIT 1"
+    );
+    let recent: Vec<SonRow> = client().query(&recent_sql, vec![json!(cutoff)]).await?;
+    if let Some(row) = recent.into_iter().next() {
+        return Ok(Some(Son::from(row)));
+    }
+
+    let fallback_sql = format!(
+        "{SON_SELECT} WHERE s.is_public = 1 ORDER BY s.likes DESC, s.created_at DESC LIMIT 1"
+    );
+    let fallback: Vec<SonRow> = client().query(&fallback_sql, vec![]).await?;
+    Ok(fallback.into_iter().next().map(Son::from))
+}
+
+fn slugify(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = true; // swallow a leading dash
+    for c in name.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    let trimmed = slug.trim_end_matches('-');
+    if trimmed.is_empty() {
+        "tag".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Free-text tag names (as typed on the upload form) → upserted `tags` rows,
+/// linked to `son_id` via `son_tags`. Idempotent: re-uploading with the same
+/// tag name reuses the existing row rather than erroring on the UNIQUE name.
+pub async fn attach_tags(
+    son_id: &str,
+    names: &[String],
+) -> anyhow::Result<Vec<crate::models::Tag>> {
+    use crate::models::Tag;
+
+    let mut tags = Vec::with_capacity(names.len());
+    for raw in names {
+        let name = raw.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let slug = slugify(name);
+        let id = uuid::Uuid::new_v4().to_string();
+
+        // Upsert by name; on conflict, this is a no-op that still lets the
+        // RETURNING clause hand back the existing row's real slug (which may
+        // differ from a fresh slugify of `name` if capitalization varies).
+        #[derive(Deserialize)]
+        struct Row {
+            name: String,
+            slug: String,
+        }
+        let rows: Vec<Row> = client()
+            .query(
+                "INSERT INTO tags (id, name, slug) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT (name) DO UPDATE SET name = excluded.name \
+                 RETURNING name, slug",
+                vec![json!(id), json!(name), json!(slug)],
+            )
+            .await?;
+        let Some(row) = rows.into_iter().next() else {
+            continue;
+        };
+
+        client()
+            .exec(
+                "INSERT INTO son_tags (son_id, tag_id) \
+                 SELECT ?1, id FROM tags WHERE name = ?2 \
+                 ON CONFLICT (son_id, tag_id) DO NOTHING",
+                vec![json!(son_id), json!(name)],
+            )
+            .await?;
+
+        tags.push(Tag {
+            name: row.name,
+            slug: row.slug,
+        });
+    }
+    Ok(tags)
+}
+
+/// Batch-attach tags to a page of sons in one query, the same pattern as
+/// `mark_liked` — not a query per card.
+async fn attach_tags_to(sons: &mut [Son]) -> anyhow::Result<()> {
+    use crate::models::Tag;
+
+    if sons.is_empty() {
+        return Ok(());
+    }
+    let holes = (0..sons.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT st.son_id, t.name, t.slug FROM son_tags st \
+         JOIN tags t ON t.id = st.tag_id \
+         WHERE st.son_id IN ({holes}) \
+         ORDER BY t.name"
+    );
+
+    #[derive(Deserialize)]
+    struct Row {
+        son_id: String,
+        name: String,
+        slug: String,
+    }
+    let rows: Vec<Row> = client()
+        .query(&sql, sons.iter().map(|s| json!(s.id)).collect())
+        .await?;
+
+    let mut by_son: std::collections::HashMap<String, Vec<Tag>> = std::collections::HashMap::new();
+    for r in rows {
+        by_son.entry(r.son_id).or_default().push(Tag {
+            name: r.name,
+            slug: r.slug,
+        });
+    }
+    for s in sons.iter_mut() {
+        if let Some(tags) = by_son.remove(&s.id) {
+            s.tags = tags;
+        }
+    }
+    Ok(())
+}
+
+/// A public gallery page filtered to one tag, newest first. Its own function
+/// rather than a third `Sort` variant: a tag filter composes with sort order
+/// conceptually, but that's more than this MVP needs — newest-within-tag
+/// covers the actual use case (browse everything under a tag).
+pub async fn sons_by_tag(
+    slug: &str,
+    cursor: Option<&str>,
+    voter: Option<&str>,
+) -> anyhow::Result<SonPage> {
+    let sql = format!(
+        "{SON_SELECT} \
+         JOIN son_tags st ON st.son_id = s.id \
+         JOIN tags t ON t.id = st.tag_id \
+         WHERE s.is_public = 1 AND t.slug = ?1 AND (?2 IS NULL OR s.created_at < ?2) \
+         ORDER BY s.created_at DESC, s.id DESC \
+         LIMIT ?3"
+    );
+    let rows: Vec<SonRow> = client()
+        .query(&sql, vec![json!(slug), json!(cursor), json!(PAGE_SIZE + 1)])
+        .await?;
+
+    let has_more = rows.len() as i64 > PAGE_SIZE;
+    let mut sons: Vec<Son> = rows
+        .into_iter()
+        .take(PAGE_SIZE as usize)
+        .map(Son::from)
+        .collect();
+    let next_cursor = if has_more {
+        sons.last().map(|s| s.created_at.clone())
+    } else {
+        None
+    };
+
+    mark_liked(&mut sons, voter).await?;
+    attach_tags_to(&mut sons).await?;
+    Ok(SonPage { sons, next_cursor })
+}
+
+/// Full-text search over titles via the `sons_fts` FTS5 index (see the
+/// migration for why external-content mode and its sync triggers), not a
+/// `LIKE '%term%'` scan.
+pub async fn search_sons(query: &str, voter: Option<&str>) -> anyhow::Result<Vec<Son>> {
+    let sql = format!(
+        "{SON_SELECT} \
+         JOIN sons_fts ON sons_fts.rowid = s.rowid \
+         WHERE s.is_public = 1 AND sons_fts MATCH ?1 \
+         ORDER BY rank \
+         LIMIT ?2"
+    );
+    // FTS5's query syntax treats several characters as operators (", *, -,
+    // etc.); a search box is free text, not a query language, so each term is
+    // quoted and the quote-escaped, then joined as an implicit AND -- this
+    // turns "what the" into a phrase search for both words present, never a
+    // syntax error from a stray character a visitor typed.
+    let escaped = query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if escaped.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let rows: Vec<SonRow> = client()
+        .query(&sql, vec![json!(escaped), json!(PAGE_SIZE)])
+        .await?;
+    let mut sons: Vec<Son> = rows.into_iter().map(Son::from).collect();
+    mark_liked(&mut sons, voter).await?;
+    attach_tags_to(&mut sons).await?;
+    Ok(sons)
 }

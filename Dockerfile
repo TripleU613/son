@@ -23,11 +23,21 @@ WORKDIR /build
 # invalidates when Cargo.toml/Cargo.lock change -- not on every source edit --
 # so candle/aws-sdk-s3/leptos and cargo-leptos's own build only recompile from
 # scratch when a dependency actually changes.
+# Plain `cargo build`, not `cargo leptos build`, against the placeholder:
+# cargo-leptos's build also runs wasm-bindgen post-processing, SCSS
+# compilation, and asset bundling, which expect a real hydrate() entrypoint
+# to exist -- an empty lib.rs makes cargo-leptos itself fail outright (this
+# was tried and observed failing in CI, not assumed). Plain `cargo build`
+# only needs to compile successfully, which an empty crate does trivially,
+# and compiling IS the expensive, cacheable part -- the wasm-bindgen/asset
+# steps are comparatively instant and only need to happen once, for real,
+# after the actual source is copied in below.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src/components src/storage src/moderation \
     && echo 'fn main() {}' > src/main.rs \
     && echo '' > src/lib.rs \
-    && cargo leptos build --release \
+    && cargo build --release --no-default-features --features ssr \
+    && cargo build --release --target wasm32-unknown-unknown --no-default-features --features hydrate --lib \
     && rm -rf src
 
 COPY src ./src

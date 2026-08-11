@@ -23,6 +23,16 @@ pub struct Son {
     /// Whether the current visitor has already liked this one. Populated per
     /// request from their anonymous cookie ID; not a property of the son.
     pub liked_by_me: bool,
+    /// `None` for an anonymous upload — still the common case, since logging
+    /// in is additive, not required.
+    pub uploader: Option<Uploader>,
+    pub tags: Vec<Tag>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tag {
+    pub name: String,
+    pub slug: String,
 }
 
 impl Son {
@@ -77,6 +87,87 @@ pub struct User {
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub is_admin: bool,
+}
+
+/// The uploader shown on a card/detail page. Thin on purpose, same reasoning
+/// as `User`: no id, no email, nothing beyond what's actually displayed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Uploader {
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+}
+
+/// One row of `/leaderboard`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeaderboardEntry {
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub upload_count: i64,
+}
+
+/// Why a son was reported. A plain string on the wire (see `reports.reason`'s
+/// comment for why it isn't an enforced DB constraint), but typed here so the
+/// UI can't submit something the report queue doesn't know how to label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReportReason {
+    NotSon,
+    Spam,
+    Porn,
+    Stolen,
+}
+
+impl ReportReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReportReason::NotSon => "not_son",
+            ReportReason::Spam => "spam",
+            ReportReason::Porn => "porn",
+            ReportReason::Stolen => "stolen",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ReportReason::NotSon => "not a son",
+            ReportReason::Spam => "spam",
+            ReportReason::Porn => "porn / NSFW",
+            ReportReason::Stolen => "stolen / not theirs to post",
+        }
+    }
+
+    pub fn all() -> [ReportReason; 4] {
+        [
+            ReportReason::NotSon,
+            ReportReason::Spam,
+            ReportReason::Porn,
+            ReportReason::Stolen,
+        ]
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "spam" => ReportReason::Spam,
+            "porn" => ReportReason::Porn,
+            "stolen" => ReportReason::Stolen,
+            _ => ReportReason::NotSon,
+        }
+    }
+}
+
+/// One report against a son, as shown in the admin queue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReportDetail {
+    pub reason: String,
+    pub message: Option<String>,
+    pub created_at: String,
+}
+
+/// A son with at least one report, plus every report against it — the admin
+/// queue's unit of review.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlaggedSon {
+    pub son: Son,
+    pub reports: Vec<ReportDetail>,
 }
 
 /// Reply from `POST /api/upload`.

@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos_meta::Title;
 
-use crate::api::list_sons;
+use crate::api::{list_sons, son_of_the_day};
 use crate::components::card::SonCard;
 use crate::models::{Son, Sort};
 
@@ -62,6 +62,8 @@ pub fn Gallery() -> impl IntoView {
             <h1>"the son collection"</h1>
             <p>"Sonion. Capri-Son. Dy-Son. Sonflower. If it has a son in it, it belongs here."</p>
         </section>
+
+        <SonOfTheDay/>
 
         <div class="sortbar">
             <button
@@ -144,5 +146,35 @@ pub fn Gallery() -> impl IntoView {
                 </button>
             </Show>
         </div>
+    }
+}
+
+/// The most-liked son from the last 24h (or overall, on a quiet day) —
+/// computed on read in `db::son_of_the_day`, not curated by anyone.
+#[component]
+fn SonOfTheDay() -> impl IntoView {
+    let featured = Resource::new(|| (), |_| son_of_the_day());
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || {
+                featured
+                    .get()
+                    .and_then(Result::ok)
+                    .flatten()
+                    .map(|s| {
+                        let href = format!("/son/{}", s.id);
+                        view! {
+                            <a href=href class="sotd">
+                                <img class="sotd-thumb" src=s.thumb_url.clone() alt=""/>
+                                <div class="sotd-copy">
+                                    <span class="sotd-label">"son of the day"</span>
+                                    <span class="sotd-title">{s.title.clone()}</span>
+                                </div>
+                            </a>
+                        }
+                    })
+            }}
+        </Suspense>
     }
 }
