@@ -39,11 +39,16 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("storage backend: {}", storage.name());
     soncollection::storage::set_backend(storage);
 
-    // Said out loud at startup, every start, because it is the kind of thing
-    // that is easy to forget is true: nothing inspects an upload's contents.
-    tracing::warn!(
-        "content moderation: NONE — uploads publish unscreened; only /admin reports can remove them"
-    );
+    // Said out loud at every start, because "are uploads being screened?" is
+    // exactly the thing that is easy to be wrong about. WARN when they are not:
+    // that state is survivable but should never be a surprise.
+    match soncollection::gemini::url() {
+        Some(url) => tracing::info!("content screening: Gemini sidecar at {url}"),
+        None => tracing::warn!(
+            "content screening: NONE (GEMINI_URL unset) — uploads publish unscreened; \
+             only /admin reports can remove them"
+        ),
+    }
 
     if soncollection::auth::google_configured() {
         tracing::info!("Google sign-in: configured");

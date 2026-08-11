@@ -149,6 +149,17 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
     // limited, or out of quota must not turn into "nobody can upload". The
     // trade-off is explicit -- an outage means unscreened uploads get through,
     // which is the same state the site is in with screening switched off.
+    // Screening and squaring, in Gemini. After the duplicate check so a re-upload
+    // costs nothing, and before storage so a refused image is never written.
+    //
+    // Two calls, reported as two steps: judging takes seconds, squaring takes
+    // most of a minute, and one label over both would be a progress list that
+    // lies about what it is waiting for.
+    //
+    // Either call being unavailable keeps the original: Gemini down, rate
+    // limited, or out of quota must not become "nobody can upload". The
+    // trade-off is explicit -- an outage means unscreened uploads get through,
+    // which is the same state the site is in with screening switched off.
     let img = if crate::gemini::url().is_some() {
         let bytes = match encode_png(&img) {
             Ok(b) => b,
@@ -157,22 +168,28 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
                 fail!("could not process this son".into());
             }
         };
-        // One sidecar call covers both Gemini requests, so the two steps are
-        // reported around it rather than between them.
+
         step!(Step::Scanning);
-        let outcome = crate::gemini::process(bytes).await;
-        step!(Step::Regenerating);
-        match outcome {
-            crate::gemini::Outcome::Accepted(square) => {
-                tracing::info!("gemini accepted and squared this upload");
-                square
+        match crate::gemini::judge(bytes.clone()).await {
+            Ok(verdict) => {
+                if let Err(reason) = verdict.acceptable() {
+                    tracing::info!(?verdict, "upload refused by gemini");
+                    reject!(reason);
+                }
+                step!(Step::Regenerating);
+                match crate::gemini::square(bytes).await {
+                    Ok(square) => {
+                        tracing::info!("gemini accepted and squared this upload");
+                        square
+                    }
+                    Err(crate::gemini::Unavailable(why)) => {
+                        tracing::error!(%why, "gemini could not square it; keeping the original");
+                        img
+                    }
+                }
             }
-            crate::gemini::Outcome::Rejected(reason) => {
-                tracing::info!(reason = %reason, "upload rejected by gemini");
-                reject!(reason);
-            }
-            crate::gemini::Outcome::Unavailable(why) => {
-                tracing::error!(why = %why, "gemini unavailable; publishing the original unscreened");
+            Err(crate::gemini::Unavailable(why)) => {
+                tracing::error!(%why, "gemini unavailable; publishing the original unscreened");
                 img
             }
         }

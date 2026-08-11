@@ -7,16 +7,25 @@ app is Rust and has no way to speak that protocol, so this is the smallest
 possible bridge -- one endpoint, no state, no database, reachable only from the
 app container on the private compose network.
 
-The contract is deliberately blunt. POST an image, get one of:
+Two endpoints, one Gemini call each:
 
-  200 + image/png            the squared image, judged safe and on-topic
-  422 + {"reason": "..."}    rejected, with a line fit to show a visitor
-  502 + {"reason": "..."}    Gemini itself failed; caller decides what to do
+  POST /judge   -> 200 {"verdict": "PASS"|"FAIL", "topic": "SON"|"NOTSON"}
+                   502 {"reason": "..."}
+  POST /square  -> 200 image bytes
+                   502 {"reason": "..."}
 
-Two Gemini calls per upload, not one. Asking a single prompt to both judge and
-generate makes the model answer as text and refuse the image ("I cannot generate,
-edit, or modify images") -- observed directly, not guessed. Judging first also
-means an unsafe upload never costs an image generation.
+Two calls per upload rather than one prompt doing both, because asking a single
+prompt to judge *and* generate makes the model answer as text and refuse the image
+("I cannot generate, edit, or modify images") -- observed directly, not guessed.
+Judging first also means an unsafe upload never costs an image generation.
+
+They are separate *endpoints* rather than one /process doing both so the caller
+can report which phase it is in. Judging takes a few seconds and generating takes
+most of a minute; behind one endpoint the whole wait had to be labelled "scanning",
+which is a progress bar that lies about what it is waiting for.
+
+The reject/accept decision lives in the caller, not here: this reports what Gemini
+said, and `crate::gemini` decides what that means.
 """
 
 from __future__ import annotations
@@ -129,14 +138,71 @@ async def health() -> dict:
     return {"accounts": len(pool.clients)}
 
 
-@app.post("/process")
-async def process(image: UploadFile = File(...)) -> Response:
+async def _with_temp(image: UploadFile):
+    """Spool the upload to a real path and hand back (client, lock, path).
+
+    A real path on disk, not BytesIO: gemini_webapi's uploader requires an
+    explicit filename for in-memory data and `generate_content` gives no way to
+    supply one, so a BytesIO silently uploads nothing and the model then answers
+    in prose with no image attached. Observed exactly that before switching.
+    """
     entry = pool.next()
     if entry is None:
-        return JSONResponse({"reason": "no Gemini account available"}, status_code=502)
+        return None
     client, lock = entry
-
     data = await image.read()
+    fd, src = tempfile.mkstemp(suffix=".png", dir="/tmp")
+    os.close(fd)
+    with open(src, "wb") as f:
+        f.write(data)
+    return client, lock, src
+
+
+@app.post("/judge")
+async def judge(image: UploadFile = File(...)) -> Response:
+    """Is it safe, and is it a son? Two words back, no JSON schema asked of the
+    model -- there are two questions with two possible answers each."""
+    got = await _with_temp(image)
+    if got is None:
+        return JSONResponse({"reason": "no Gemini account available"}, status_code=502)
+    client, lock, src = got
+    try:
+        async with lock:
+            judged = await client.generate_content(
+                JUDGE_PROMPT, files=[src], model=JUDGE_MODEL, temporary=True
+            )
+    except Exception as e:  # noqa: BLE001
+        log.error("judge call failed: %s", e)
+        return JSONResponse({"reason": f"gemini judge failed: {e}"}, status_code=502)
+    finally:
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
+
+    lines = [l.strip().upper() for l in judged.text.splitlines() if l.strip()]
+    verdict = lines[0] if lines else ""
+    topic = lines[1] if len(lines) > 1 else ""
+    log.info("verdict=%r topic=%r", verdict, topic)
+    # Reported as-is, including an empty answer. The caller fails closed on
+    # anything that is not an explicit PASS.
+    return JSONResponse({"verdict": verdict, "topic": topic})
+
+
+@app.post("/square")
+async def square(image: UploadFile = File(...)) -> Response:
+    """The slow one: Gemini redrawing the image as a 1:1 square."""
+    got = await _with_temp(image)
+    if got is None:
+        return JSONResponse({"reason": "no Gemini account available"}, status_code=502)
+    client, lock, src = got
+    try:
+        return await _square(client, lock, src)
+    finally:
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
 
     # A real path on disk, not BytesIO: gemini_webapi's uploader requires an
     # explicit filename for in-memory data and `generate_content` gives no way to
@@ -157,34 +223,8 @@ async def process(image: UploadFile = File(...)) -> Response:
             pass
 
 
-async def _process(client: GeminiClient, lock: asyncio.Lock, src: str) -> Response:
+async def _square(client: GeminiClient, lock: asyncio.Lock, src: str) -> Response:
     async with lock:
-        try:
-            # temporary=True so uploads don't accumulate in the account's real
-            # chat history.
-            judged = await client.generate_content(
-                JUDGE_PROMPT, files=[src], model=JUDGE_MODEL, temporary=True
-            )
-        except Exception as e:  # noqa: BLE001
-            log.error("judge call failed: %s", e)
-            return JSONResponse({"reason": f"gemini judge failed: {e}"}, status_code=502)
-
-        lines = [l.strip().upper() for l in judged.text.splitlines() if l.strip()]
-        verdict = lines[0] if lines else ""
-        topic = lines[1] if len(lines) > 1 else ""
-        log.info("verdict=%r topic=%r", verdict, topic)
-
-        # Fail closed: anything that is not an explicit PASS is a rejection,
-        # including an empty answer or the model declining to look at the image.
-        if not verdict.startswith("PASS"):
-            return JSONResponse(
-                {"reason": "This image was not accepted."}, status_code=422
-            )
-        if topic.startswith("NOTSON"):
-            return JSONResponse(
-                {"reason": "That doesn't look like a son."}, status_code=422
-            )
-
         try:
             regen = await client.generate_content(
                 SQUARE_PROMPT, files=[src], model=IMAGE_MODEL, temporary=True
@@ -196,13 +236,11 @@ async def _process(client: GeminiClient, lock: asyncio.Lock, src: str) -> Respon
         if not regen.images:
             # The model answered in prose instead of producing a picture. The
             # caller keeps the original rather than losing the upload.
-            return JSONResponse(
-                {"reason": "gemini returned no image"}, status_code=502
-            )
+            return JSONResponse({"reason": "gemini returned no image"}, status_code=502)
 
         # `save()` is the only way to get the bytes -- the Image type exposes no
         # reader -- so it round-trips through tmpfs and is deleted immediately.
-        # /tmp is the one writable path the container has.
+        path = None
         try:
             path = await regen.images[0].save(
                 path="/tmp", filename=f"regen-{os.getpid()}-{id(regen)}.bin", verbose=False
@@ -210,11 +248,12 @@ async def _process(client: GeminiClient, lock: asyncio.Lock, src: str) -> Respon
             with open(path, "rb") as f:
                 out = f.read()
         finally:
-            try:
-                os.unlink(path)
-            except (OSError, NameError, UnboundLocalError):
-                pass
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
-    # Whatever Gemini's container was (it returns JPEG today), the app re-encodes
-    # to PNG on the way to storage, so the format here is not load-bearing.
+    # Whatever Gemini's container was (JPEG today), the app re-encodes to PNG on
+    # the way to storage, so the format here is not load-bearing.
     return Response(content=out, media_type="application/octet-stream")
