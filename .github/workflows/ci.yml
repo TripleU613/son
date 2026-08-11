@@ -103,6 +103,12 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read-only, unlike build's `packages: write`: this job only pulls the
+      # image build() already pushed. Needed so GITHUB_TOKEN can authenticate
+      # bulky-server's pull below.
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -133,6 +139,8 @@ jobs:
         # here once, not once per command.
         env:
           SON_IMAGE: ${{ needs.build.outputs.image }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           CF_D1_API_TOKEN: ${{ secrets.CF_D1_API_TOKEN }}
@@ -155,10 +163,30 @@ jobs:
             EXPORTS="$EXPORTS $v='${!v}'"
           done
 
-          ssh root@bulky-server \
-            "$EXPORTS docker compose -f /opt/son/docker-compose.yml pull && \
-             $EXPORTS docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"
-      # No secret value is ever written to a file on bulky-server: each is a
-      # shell-local env var for exactly the two commands above, passed
-      # straight through to docker compose's own ${VAR} interpolation, and
-      # gone once this SSH session ends.
+          # The image is in a private GHCR package, and the `docker login` the
+          # build job did was on the *runner* -- bulky-server pulls it itself
+          # and has no credential of its own, which is exactly why every
+          # deploy failed with "error from registry: unauthorized" while the
+          # build above succeeded. Piped over stdin rather than passed as an
+          # argument so the token never lands in the remote process list.
+          printf '%s' "$GHCR_TOKEN" \
+            | ssh root@bulky-server "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+          # `if`, not a bare command, so a failed deploy still reaches the
+          # logout below instead of leaving a registry credential sitting in
+          # root's ~/.docker/config.json on the server.
+          if ssh root@bulky-server \
+               "$EXPORTS docker compose -f /opt/son/docker-compose.yml pull && \
+                $EXPORTS docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"; then
+            status=0
+          else
+            status=$?
+          fi
+
+          ssh root@bulky-server 'docker logout ghcr.io' || true
+          exit $status
+      # No secret value is ever left on bulky-server: the deploy variables are
+      # shell-local env vars for exactly the commands above, passed straight
+      # through to docker compose's own ${VAR} interpolation and gone when the
+      # SSH session ends, and the one credential that does touch disk (the
+      # GHCR login) is removed again by the logout above, pass or fail.

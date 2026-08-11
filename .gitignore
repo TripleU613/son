@@ -6,3 +6,5 @@
 sons.db*
 .env
 /models
+# Local agent/editor tooling state, not project config.
+/.claude
