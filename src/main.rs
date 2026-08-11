@@ -3,7 +3,7 @@
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::Router;
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
@@ -41,6 +41,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("moderation: {}", moderator.name());
     soncollection::upload_route::set_moderator(moderator);
 
+    if soncollection::auth::google_configured() {
+        tracing::info!("Google sign-in: configured");
+    } else {
+        tracing::info!("Google sign-in: not configured (GOOGLE_CLIENT_ID/SECRET unset) — /auth/google/login will redirect back with an error");
+    }
+
     // cargo-leptos supplies site-addr and site-root through Cargo.toml metadata.
     let conf = get_configuration(None)?;
     let addr = conf.leptos_options.site_addr;
@@ -54,6 +60,12 @@ async fn main() -> anyhow::Result<()> {
         //
         // Declared before the wildcard so the static path wins the match.
         .route("/api/upload", post(soncollection::upload_route::upload))
+        .route("/auth/google/login", get(soncollection::oauth_route::login))
+        .route(
+            "/auth/google/callback",
+            get(soncollection::oauth_route::callback),
+        )
+        .route("/auth/logout", post(soncollection::oauth_route::logout))
         .route(
             "/api/{*fn_name}",
             axum::routing::any(leptos_axum::handle_server_fns),

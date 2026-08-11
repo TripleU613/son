@@ -21,7 +21,22 @@ fn moderator() -> &'static dyn Moderator {
     MODERATOR.get().expect("moderator not initialized").as_ref()
 }
 
-pub async fn upload(mut mp: Multipart) -> impl IntoResponse {
+// `HeaderMap` before `Multipart`: axum requires body-consuming extractors
+// (Multipart reads the request body) to come last in a handler's arguments.
+pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl IntoResponse {
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok());
+    // A cookie lookup failure (D1 unreachable) should not block the upload
+    // over something unrelated to it; fall back to anonymous rather than
+    // erroring the whole request.
+    let uploader = crate::auth::current_user(cookie_header)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("could not resolve uploader from session: {e}");
+            None
+        });
+
     let mut bytes: Option<Vec<u8>> = None;
     let mut title = String::new();
 
@@ -127,6 +142,7 @@ pub async fn upload(mut mp: Multipart) -> impl IntoResponse {
         son_score: verdict.son_score,
         nsfw_score: verdict.nsfw_score,
         embedding: verdict.embedding.as_deref(),
+        uploader_id: uploader.as_ref().map(|u| u.id.as_str()),
     })
     .await;
 

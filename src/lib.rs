@@ -4,11 +4,15 @@ pub mod components;
 pub mod models;
 
 #[cfg(feature = "ssr")]
+pub mod auth;
+#[cfg(feature = "ssr")]
 pub mod d1;
 #[cfg(feature = "ssr")]
 pub mod db;
 #[cfg(feature = "ssr")]
 pub mod moderation;
+#[cfg(feature = "ssr")]
+pub mod oauth_route;
 #[cfg(feature = "ssr")]
 pub mod storage;
 #[cfg(feature = "ssr")]

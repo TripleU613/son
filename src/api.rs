@@ -6,7 +6,7 @@
 
 use leptos::prelude::*;
 
-use crate::models::{Son, SonPage};
+use crate::models::{Son, SonPage, User};
 // Sort::from_str_or_default only runs server-side (the client sends the sort
 // as a plain string over the wire), so the type itself is ssr-only here.
 #[cfg(feature = "ssr")]
@@ -111,6 +111,22 @@ pub async fn like_son(id: String) -> Result<(i64, bool), ServerFnError> {
     };
 
     crate::db::toggle_like(&id, &voter)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Who, if anyone, is signed in — for the nav to show a sign-in link or an
+/// avatar. `Ok(None)` covers both "never signed in" and "Google sign-in isn't
+/// configured yet"; the nav doesn't need to tell those apart.
+#[server(CurrentUser, "/api")]
+pub async fn current_user() -> Result<Option<User>, ServerFnError> {
+    let headers: axum::http::HeaderMap = leptos_axum::extract()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok());
+    crate::auth::current_user(cookie_header)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

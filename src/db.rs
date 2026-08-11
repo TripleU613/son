@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::d1::D1;
-use crate::models::{Son, SonPage, Sort, PAGE_SIZE};
+use crate::models::{Son, SonPage, Sort, User, PAGE_SIZE};
 
 /// Process-wide client, set once at startup.
 static D1_CLIENT: std::sync::OnceLock<D1> = std::sync::OnceLock::new();
@@ -222,6 +222,11 @@ pub struct NewSon<'a> {
     pub son_score: f32,
     pub nsfw_score: f32,
     pub embedding: Option<&'a [f32]>,
+    /// Who uploaded this, if they were signed in. `None` for an anonymous
+    /// upload — still fully supported; accounts are additive, not a gate.
+    /// Not yet surfaced anywhere (attribution UI is a later phase); stored now
+    /// so that later phase has real data instead of starting from a gap.
+    pub uploader_id: Option<&'a str>,
 }
 
 pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
@@ -237,8 +242,9 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
     client()
         .exec(
             "INSERT INTO sons (id, title, orig_url, thumb_url, width, height, \
-                               son_score, nsfw_score, embedding, created_at, is_public, reports) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0)",
+                               son_score, nsfw_score, embedding, created_at, is_public, reports, \
+                               uploader_id) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0,?11)",
             vec![
                 json!(new.id),
                 json!(new.title),
@@ -250,6 +256,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
                 json!(new.nsfw_score),
                 blob,
                 json!(created_at),
+                json!(new.uploader_id),
             ],
         )
         .await?;
@@ -375,4 +382,78 @@ pub async fn toggle_like(son_id: &str, voter: &str) -> anyhow::Result<(i64, bool
 
     let count = recomputed.first().map(|r| r.likes).unwrap_or(0);
     Ok((count, now_liked))
+}
+
+const USER_COLS: &str = "id, email, display_name, avatar_url, is_admin";
+
+#[derive(Deserialize)]
+struct UserRow {
+    id: String,
+    email: String,
+    display_name: String,
+    avatar_url: Option<String>,
+    is_admin: i64,
+}
+
+impl From<UserRow> for User {
+    fn from(r: UserRow) -> Self {
+        // email intentionally dropped: User is the client-facing shape (see
+        // its doc comment), and email has no reason to leave the server.
+        let _ = r.email;
+        User {
+            id: r.id,
+            display_name: r.display_name,
+            avatar_url: r.avatar_url,
+            is_admin: r.is_admin != 0,
+        }
+    }
+}
+
+pub async fn get_user(id: &str) -> anyhow::Result<Option<User>> {
+    let sql = format!("SELECT {USER_COLS} FROM users WHERE id = ?1");
+    let rows: Vec<UserRow> = client().query(&sql, vec![json!(id)]).await?;
+    Ok(rows.into_iter().next().map(User::from))
+}
+
+/// Create or update a user from their Google profile, keyed on `google_sub`
+/// (Google's stable subject id — the only field from a Google profile that is
+/// guaranteed never to change or be reused for a different person).
+///
+/// `is_admin` is untouched on conflict: it starts at 0 for a new row, and an
+/// existing admin does not get silently reset just because they logged in
+/// again with a since-changed display name or photo.
+pub async fn upsert_user(
+    google_sub: &str,
+    email: &str,
+    display_name: &str,
+    avatar_url: Option<&str>,
+) -> anyhow::Result<User> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let sql = format!(
+        "INSERT INTO users (id, google_sub, email, display_name, avatar_url, is_admin, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6) \
+         ON CONFLICT (google_sub) DO UPDATE SET \
+             email = excluded.email, \
+             display_name = excluded.display_name, \
+             avatar_url = excluded.avatar_url \
+         RETURNING {USER_COLS}"
+    );
+    let rows: Vec<UserRow> = client()
+        .query(
+            &sql,
+            vec![
+                json!(id),
+                json!(google_sub),
+                json!(email),
+                json!(display_name),
+                json!(avatar_url),
+                json!(chrono::Utc::now().to_rfc3339()),
+            ],
+        )
+        .await?;
+
+    rows.into_iter()
+        .next()
+        .map(User::from)
+        .ok_or_else(|| anyhow::anyhow!("upsert_user: RETURNING produced no row"))
 }

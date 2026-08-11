@@ -80,6 +80,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # OCI/Docker tags must be all-lowercase; github.repository preserves the
+      # repo's actual case (TripleU613/son), which buildx correctly rejects.
+      # Computed once here rather than repeating a shell lowercase in every
+      # place the image reference is needed below.
+      - name: compute lowercase image repository
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -95,8 +103,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+            ghcr.io/${{ steps.repo.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -121,7 +129,7 @@ jobs:
         # keypair -- so no private key is loaded here, only the host-key pin
         # above and this runner's own tag:ci membership from the step before.
         env:
-          SON_IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          SON_IMAGE: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           CF_D1_API_TOKEN: ${{ secrets.CF_D1_API_TOKEN }}

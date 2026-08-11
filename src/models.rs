@@ -66,6 +66,19 @@ impl Sort {
     }
 }
 
+/// A signed-in user, as far as the UI is concerned.
+///
+/// Deliberately thin: no email, no Google subject id. Those have no reason to
+/// reach the client, and keeping them out of this struct means they can never
+/// leak through a server function response by accident.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub is_admin: bool,
+}
+
 /// Reply from `POST /api/upload`.
 ///
 /// Lives here rather than beside the handler so the wasm side deserializes the

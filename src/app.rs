@@ -1,8 +1,10 @@
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
+use leptos_router::hooks::use_location;
 use leptos_router::{path, SsrMode};
 
+use crate::api::current_user;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
 use crate::components::upload::Upload;
@@ -58,6 +60,9 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn Nav() -> impl IntoView {
+    let location = use_location();
+    let user = Resource::new(|| (), |_| current_user());
+
     view! {
         <header class="nav">
             <A href="/" attr:class="brand">
@@ -67,9 +72,55 @@ fn Nav() -> impl IntoView {
             <nav class="nav-links">
                 <A href="/">"gallery"</A>
                 <A href="/upload">"contribute a son"</A>
+                <Suspense fallback=|| ()>
+                    {move || {
+                        user.get()
+                            .map(|res| match res {
+                                Ok(Some(u)) => {
+                                    view! {
+                                        <span class="nav-user">
+                                            {u.avatar_url.clone().map(|src| {
+                                                view! { <img class="nav-avatar" src=src alt=""/> }
+                                            })}
+                                            <span>{u.display_name.clone()}</span>
+                                            <form method="post" action="/auth/logout" class="nav-logout">
+                                                <button type="submit" class="link-btn">"sign out"</button>
+                                            </form>
+                                        </span>
+                                    }
+                                        .into_any()
+                                }
+                                _ => {
+                                    // Ok(None) (never signed in, or Google
+                                    // sign-in isn't configured yet) and Err
+                                    // (couldn't reach D1) get the same
+                                    // sign-in link — nothing useful to tell
+                                    // a visitor apart between those here.
+                                    let return_to = location.pathname.get();
+                                    let href = format!(
+                                        "/auth/google/login?return_to={}",
+                                        urlencode(&return_to),
+                                    );
+                                    view! { <a href=href>"sign in"</a> }.into_any()
+                                }
+                            })
+                    }}
+                </Suspense>
             </nav>
         </header>
     }
+}
+
+/// Percent-encode a path for use as a query value. `return_to` is always a
+/// same-origin path (checked again server-side in oauth_route::login), so
+/// only the characters that would break a query string need escaping.
+fn urlencode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' => c.to_string(),
+            _ => format!("%{:02X}", c as u32),
+        })
+        .collect()
 }
 
 #[component]
