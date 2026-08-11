@@ -6,6 +6,8 @@
 
 use leptos::prelude::*;
 
+use crate::components::icon::{Ico, LuGrid2x2, LuLayoutGrid, LuList};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Density {
     Compact,
@@ -30,30 +32,30 @@ pub fn DensityToggle(
     set_density: WriteSignal<Density>,
 ) -> impl IntoView {
     view! {
-        <div class="density-toggle" role="group" aria-label="grid density">
+        <div class="density-toggle" role="group" aria-label="View mode">
             <button
                 class:active=move || density.get() == Density::Compact
                 on:click=move |_| set_density.set(Density::Compact)
-                title="compact grid"
-                aria-label="compact grid"
+                title="Compact grid"
+                aria-label="Compact grid"
             >
-                "▦"
+                <Ico icon=LuLayoutGrid size=16/>
             </button>
             <button
                 class:active=move || density.get() == Density::Cozy
                 on:click=move |_| set_density.set(Density::Cozy)
-                title="cozy grid"
-                aria-label="cozy grid"
+                title="Grid"
+                aria-label="Grid"
             >
-                "▤"
+                <Ico icon=LuGrid2x2 size=16/>
             </button>
             <button
                 class:active=move || density.get() == Density::List
                 on:click=move |_| set_density.set(Density::List)
-                title="list view"
-                aria-label="list view"
+                title="List"
+                aria-label="List"
             >
-                "☰"
+                <Ico icon=LuList size=16/>
             </button>
         </div>
     }

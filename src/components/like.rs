@@ -1,8 +1,10 @@
 use leptos::prelude::*;
 
+use crate::components::icon::{Ico, LuHeart};
+
 use crate::api::like_son;
 
-/// The 😭 button.
+/// The "cry over this son" button -- the site's like/favourite action.
 ///
 /// Updates optimistically: the count moves the instant it is clicked rather
 /// than after a round trip, then reconciles with whatever the server says. On
@@ -65,10 +67,16 @@ pub fn LikeButton(
             class:liked=move || liked.get()
             on:click=click
             aria-label=move || {
-                if liked.get() { "un-cry over this son" } else { "cry over this son" }
+                if liked.get() { "Un-cry over this son" } else { "Cry over this son" }
             }
         >
-            <span class="like-emoji">"😭"</span>
+            // A Lucide heart rather than the 😭 glyph: the redesign uses one
+            // line-icon language throughout and explicitly rules out emoji
+            // standing in for icons. The *wording* keeps the joke -- the
+            // accessible label and the metric are still "cry over", not "like".
+            <span class="like-emoji">
+                <Ico icon=LuHeart size=15/>
+            </span>
             <span class="like-count">{move || count.get()}</span>
         </button>
     }

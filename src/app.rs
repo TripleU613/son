@@ -8,9 +8,11 @@ use crate::api::current_user;
 use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
+use crate::components::icon::{Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound};
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
 use crate::components::search::SearchPage;
+use crate::components::search_box::SearchBox;
 use crate::components::tag_page::TagPage;
 use crate::components::upload::Upload;
 
@@ -56,9 +58,17 @@ pub fn App() -> impl IntoView {
         <Title text="son collection"/>
 
         <Router>
-            <Nav/>
-            <main class="wrap">
-                <Routes fallback=NotFound>
+            // One shell, rearranged entirely by CSS. The primary nav exists
+            // exactly once in the DOM and becomes either the desktop sidebar's
+            // link list or the mobile bottom bar -- rendering two copies would
+            // duplicate landmarks, and branching on window.innerWidth in Rust
+            // would invite the hydration mismatch that already took down the
+            // wasm module once this session.
+            <div class="app">
+                <TopBar/>
+                <Rail/>
+                <main class="content">
+                    <Routes fallback=NotFound>
                     // Async mode on the two data-driven routes: the default
                     // out-of-order streaming flushes <head> before resources
                     // resolve, so og:/twitter: tags and card markup ended up in
@@ -74,107 +84,164 @@ pub fn App() -> impl IntoView {
                     // and is gated server-side in every fn it calls anyway, so
                     // there is nothing here for out-of-order streaming to leak.
                     <Route path=path!("/admin") view=Admin/>
-                    <Route path=path!("/privacy") view=Privacy/>
-                    <Route path=path!("/tos") view=Terms/>
-                </Routes>
-            </main>
-            <footer class="foot">
-                <span>"every image is somebody's son"</span>
-                <nav class="foot-links">
-                    <A href="/privacy">"privacy"</A>
-                    <A href="/tos">"terms"</A>
-                </nav>
-            </footer>
+                        <Route path=path!("/privacy") view=Privacy/>
+                        <Route path=path!("/tos") view=Terms/>
+                    </Routes>
+                </main>
+            </div>
         </Router>
     }
 }
 
+/// The mobile-only top bar: brand on the left, search and account on the
+/// right. Hidden by CSS at the desktop breakpoint, where the brand lives in the
+/// sidebar and search moves into the gallery's own utility row. Because it is
+/// `display: none` there, only one brand link is ever in the accessibility
+/// tree despite appearing twice in the markup.
 #[component]
-fn Nav() -> impl IntoView {
+fn TopBar() -> impl IntoView {
+    view! {
+        <header class="topbar">
+            <A href="/" attr:class="brand" attr:aria-label="son collection, home">
+                <span class="brand-word">"son"</span>
+                <span class="brand-tears" aria-hidden="true">
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                </span>
+            </A>
+            <div class="topbar-actions">
+                <SearchBox extra_class="searchbox--bar"/>
+                <AccountAction compact=true/>
+            </div>
+        </header>
+    }
+}
+
+/// The primary navigation. A left sidebar on desktop; a fixed bottom bar on
+/// mobile. Same three links either way, in one place in the DOM.
+#[component]
+fn Rail() -> impl IntoView {
+    view! {
+        <aside class="rail">
+            <A href="/" attr:class="rail-brand" attr:aria-label="son collection, home">
+                <span class="brand-word">"son"</span>
+                <span class="brand-tears" aria-hidden="true">
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                    <span>"\u{1F62D}"</span>
+                </span>
+            </A>
+
+            <nav class="rail-nav" aria-label="main">
+                // exact, not the default prefix match: every route starts with
+                // "/", so without this the Gallery link would render
+                // aria-current="page" on every page in the app.
+                <A href="/" attr:class="rail-link" exact=true>
+                    <Ico icon=LuImage/>
+                    <span class="rail-label">"Gallery"</span>
+                </A>
+                <A href="/upload" attr:class="rail-link">
+                    <Ico icon=LuCirclePlus/>
+                    <span class="rail-label">"Contribute"</span>
+                </A>
+                <A href="/leaderboard" attr:class="rail-link">
+                    <Ico icon=LuTrophy/>
+                    <span class="rail-label">"Leaderboard"</span>
+                </A>
+            </nav>
+
+            // Desktop-only tail: account plus the legal links that used to sit
+            // in a page-wide footer competing with the bottom nav on mobile.
+            <div class="rail-foot">
+                <AccountAction compact=false/>
+                <div class="rail-legal">
+                    <A href="/privacy">"Privacy"</A>
+                    <A href="/tos">"Terms"</A>
+                </div>
+            </div>
+        </aside>
+    }
+}
+
+/// Sign-in link, or the signed-in user's avatar/name plus sign-out. `compact`
+/// drops the name and legal tail for the mobile top bar, where there is only
+/// room for the avatar.
+#[component]
+fn AccountAction(compact: bool) -> impl IntoView {
     let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
 
     view! {
-        // Two tiers, not one flat row: on a phone the old single-row nav
-        // wrapped into unstyled soup (three links, then a search box and a
-        // sign-in link at a different scale on their own line). Brand and
-        // account actions belong together on top; the section links are their
-        // own strip that scrolls sideways instead of wrapping.
-        <header class="nav">
-            <div class="nav-top">
-                <A href="/" attr:class="brand">
-                    <span class="brand-word">"son"</span>
-                    // One span per tear rather than a single five-emoji string:
-                    // clipping the string with overflow:hidden sliced a glyph
-                    // in half on narrow screens, which just looked broken. As
-                    // separate elements, CSS can drop whole tears cleanly.
-                    <span class="brand-tears" aria-hidden="true">
-                        <span>"😭"</span>
-                        <span>"😭"</span>
-                        <span>"😭"</span>
-                        <span>"😭"</span>
-                        <span>"😭"</span>
-                    </span>
-                </A>
-                <div class="nav-actions">
-                    // A plain GET form, not a JS-driven search-as-you-type: it
-                    // works with hydration not yet loaded, and /search's own
-                    // results render server-side from the query string either way.
-                    <form method="get" action="/search" class="nav-search" role="search">
-                        <input
-                            type="search"
-                            name="q"
-                            placeholder="search"
-                            aria-label="search sons"
-                            maxlength="100"
-                        />
-                    </form>
-                    <Suspense fallback=|| ()>
-                        {move || {
-                            user.get()
-                                .map(|res| match res {
-                                    Ok(Some(u)) => {
-                                        view! {
-                                            <span class="nav-user">
-                                                {u.is_admin.then(|| view! { <A href="/admin">"admin"</A> })}
-                                                {u.avatar_url.clone().map(|src| {
-                                                    view! { <img class="nav-avatar" src=src alt=""/> }
-                                                })}
-                                                <span class="nav-username">{u.display_name.clone()}</span>
-                                                <form method="post" action="/auth/logout" class="nav-logout">
-                                                    <button type="submit" class="link-btn">"sign out"</button>
-                                                </form>
-                                            </span>
-                                        }
-                                            .into_any()
-                                    }
-                                    _ => {
-                                        // Ok(None) (never signed in, or Google
-                                        // sign-in isn't configured yet) and Err
-                                        // (couldn't reach D1) get the same
-                                        // sign-in link — nothing useful to tell
-                                        // a visitor apart between those here.
-                                        let return_to = location.pathname.get();
-                                        let href = format!(
-                                            "/auth/google/login?return_to={}",
-                                            urlencode(&return_to),
-                                        );
-                                        view! {
-                                            <a class="nav-signin" href=href>"sign in"</a>
-                                        }
-                                            .into_any()
-                                    }
-                                })
-                        }}
-                    </Suspense>
-                </div>
-            </div>
-            <nav class="nav-links">
-                <A href="/" attr:class="nav-link">"gallery"</A>
-                <A href="/upload" attr:class="nav-link">"contribute"</A>
-                <A href="/leaderboard" attr:class="nav-link">"leaderboard"</A>
-            </nav>
-        </header>
+        <Suspense fallback=|| ()>
+            {move || {
+                user.get()
+                    .map(|res| match res {
+                        Ok(Some(u)) => {
+                            view! {
+                                <div class="account">
+                                    {u.is_admin
+                                        .then(|| {
+                                            view! {
+                                                <A href="/admin" attr:class="account-admin">"Admin"</A>
+                                            }
+                                        })}
+                                    {u
+                                        .avatar_url
+                                        .clone()
+                                        .map(|src| view! { <img class="account-avatar" src=src alt=""/> })}
+                                    {(!compact)
+                                        .then(|| {
+                                            view! {
+                                                <span class="account-name">{u.display_name.clone()}</span>
+                                            }
+                                        })}
+                                    <form method="post" action="/auth/logout" class="account-out">
+                                        <button
+                                            type="submit"
+                                            class="icon-btn"
+                                            aria-label="Sign out"
+                                            title="Sign out"
+                                        >
+                                            <Ico icon=LuLogOut size=16/>
+                                        </button>
+                                    </form>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                        _ => {
+                            // Ok(None) (never signed in, or Google sign-in is
+                            // not configured yet) and Err (couldn't reach D1)
+                            // get the same link -- nothing useful to tell a
+                            // visitor apart between those here.
+                            let return_to = location.pathname.get();
+                            let href = format!(
+                                "/auth/google/login?return_to={}",
+                                urlencode(&return_to),
+                            );
+                            if compact {
+                                view! {
+                                    <a class="icon-btn" href=href aria-label="Sign in" title="Sign in">
+                                        <Ico icon=LuUserRound size=18/>
+                                    </a>
+                                }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <a class="rail-signin" href=href>
+                                        <Ico icon=LuUserRound size=16/>
+                                        <span>"Sign in"</span>
+                                    </a>
+                                }
+                                    .into_any()
+                            }
+                        }
+                    })
+            }}
+        </Suspense>
     }
 }
 

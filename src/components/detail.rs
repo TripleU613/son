@@ -4,6 +4,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 
 use crate::api::get_son;
+use crate::components::icon::{Ico, LuDownload, LuSun, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::report::ReportForm;
 use crate::models::Son;
@@ -156,37 +157,53 @@ pub fn SonDetail() -> impl IntoView {
                                         height=s.height
                                     />
                                     <div class="detail-meta">
-                                        <h1>{s.title.clone()}</h1>
-                                        <div class="detail-like">
+                                        <h1 class="detail-title">{s.title.clone()}</h1>
+
+                                        // Sun level: icon + value, no label
+                                        // column. This is the site's own
+                                        // metric, so it leads the metadata.
+                                        <div class="detail-stat">
+                                            <Ico icon=LuSun size=16/>
+                                            <span>{s.sonness_label()}</span>
+                                        </div>
+
+                                        // Contributor and date on one thin
+                                        // line, replacing a four-row <dl> of
+                                        // label/value pairs.
+                                        <div class="detail-byline">
+                                            <Ico icon=LuUserRound size=15/>
+                                            <span>
+                                                {match &s.uploader {
+                                                    Some(u) => u.display_name.clone(),
+                                                    None => "anonymous".to_string(),
+                                                }}
+                                            </span>
+                                            <span class="detail-sep">"·"</span>
+                                            <span>{s.created_at.chars().take(10).collect::<String>()}</span>
+                                            <span class="detail-sep">"·"</span>
+                                            <span>{format!("{}\u{00D7}{}", s.width, s.height)}</span>
+                                        </div>
+
+                                        {tag_chips}
+
+                                        // Engagement row: icon + value, one
+                                        // line, thin separators instead of
+                                        // nesting each action in its own card.
+                                        <div class="detail-actions">
                                             <LikeButton
                                                 id=s.id.clone()
                                                 initial_count=s.likes
                                                 initial_liked=s.liked_by_me
                                             />
+                                            <a
+                                                class="action-btn"
+                                                href=format!("/son/{}/download", s.id)
+                                                aria-label="Download this son"
+                                            >
+                                                <Ico icon=LuDownload size=15/>
+                                                <span>"Download"</span>
+                                            </a>
                                         </div>
-                                        {tag_chips}
-                                        <dl>
-                                            <dt>"sonness"</dt>
-                                            <dd>{s.sonness_label()}</dd>
-                                            <dt>"dimensions"</dt>
-                                            <dd>{format!("{}×{}", s.width, s.height)}</dd>
-                                            <dt>"collected"</dt>
-                                            <dd>{s.created_at.clone()}</dd>
-                                            <dt>"contributed by"</dt>
-                                            <dd>
-                                                {match &s.uploader {
-                                                    Some(u) => u.display_name.clone(),
-                                                    None => "anonymous".to_string(),
-                                                }}
-                                            </dd>
-                                        </dl>
-
-                                        <a
-                                            class="download-btn"
-                                            href=format!("/son/{}/download", s.id)
-                                        >
-                                            "download"
-                                        </a>
 
                                         <ReportForm son_id=s.id.clone()/>
                                     </div>

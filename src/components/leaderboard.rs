@@ -2,6 +2,8 @@ use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 
 use crate::api::leaderboard;
+use crate::components::empty::{EmptyState, ErrorState};
+use crate::components::icon::LuTrophy;
 use crate::seo::absolute;
 
 #[component]
@@ -9,31 +11,27 @@ pub fn Leaderboard() -> impl IntoView {
     let entries = Resource::new_blocking(|| (), |_| leaderboard());
 
     view! {
-        <Title text="leaderboard — son collection"/>
+        <Title text="Leaderboard — son collection"/>
         <Meta
             name="description"
-            content="Top contributors to the son collection, ranked by public sons uploaded."
+            content="Top contributors to the son collection."
         />
         <Link rel="canonical" href=absolute("/leaderboard")/>
 
-        <section class="hero">
-            <h1>"contributors"</h1>
-            <p>"Ranked by public sons uploaded while signed in. Anonymous uploads don't count toward this — sign in for the credit."</p>
-        </section>
+        // No ranking explainer. The list itself communicates the ranking, and
+        // the eligibility paragraph that used to sit here was pure narration.
+        <h1 class="page-title">"Leaderboard"</h1>
 
         <Suspense fallback=|| view! { <p class="loading">"tallying…"</p> }>
             {move || {
                 entries
                     .get()
                     .map(|res| match res {
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        Err(_) => {
+                            view! { <ErrorState message="Something went wrong."/> }.into_any()
+                        }
                         Ok(rows) if rows.is_empty() => {
-                            view! {
-                                <section class="empty">
-                                    <h2>"No contributors yet."</h2>
-                                    <p>"Sign in and upload a son to be the first."</p>
-                                </section>
-                            }
+                            view! { <EmptyState icon=LuTrophy message="No contributors yet."/> }
                                 .into_any()
                         }
                         Ok(rows) => {
@@ -51,7 +49,7 @@ pub fn Leaderboard() -> impl IntoView {
                                                 })}
                                             <span class="leaderboard-name">{entry.display_name.clone()}</span>
                                             <span class="leaderboard-count">
-                                                {entry.upload_count} " sons"
+                                                {entry.upload_count}
                                             </span>
                                         </li>
                                     </For>

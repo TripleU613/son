@@ -4,7 +4,10 @@ use leptos_meta::{Link, Meta, Title};
 use crate::api::{list_sons, son_of_the_day};
 use crate::components::card::SonCard;
 use crate::components::density::{Density, DensityToggle, GridSkeleton};
+use crate::components::empty::EmptyState;
+use crate::components::icon::LuImage;
 use crate::components::infinite_scroll::ScrollSentinel;
+use crate::components::search_box::SearchBox;
 use crate::models::{Son, Sort};
 use crate::seo::absolute;
 
@@ -96,36 +99,38 @@ pub fn Gallery() -> impl IntoView {
         <Meta name="description" content=DESCRIPTION/>
         <Link rel="canonical" href=absolute("/")/>
 
-        <section class="hero">
-            <h1>"the son collection"</h1>
-            <p>"Sonion. Capri-Son. Dy-Son. Sonflower. If it has a son in it, it belongs here."</p>
-        </section>
+        // No hero. The gallery is the product, so content starts at the top of
+        // the page; the title/tagline/marketing copy the old layout opened with
+        // is gone rather than reworded.
+        <div class="utilitybar">
+            <SearchBox extra_class="searchbox--wide"/>
+            <DensityToggle density=density set_density=set_density/>
+        </div>
 
         <SonOfTheDay/>
 
-        <div class="sortbar">
+        <div class="filterbar" role="group" aria-label="Sort">
             <button
                 class:active=move || sort.get() == Sort::Newest
                 on:click=move |_| choose(Sort::Newest)
-            >
-                "newest"
+             aria-label="Sort by newest">
+                "New"
             </button>
             <button
                 class:active=move || sort.get() == Sort::MostLiked
                 on:click=move |_| choose(Sort::MostLiked)
-            >
-                "most cried over"
+             aria-label="Sort by most cried over">
+                "Cried"
             </button>
-            <button class:active=move || sort.get() == Sort::Az on:click=move |_| choose(Sort::Az)>
-                "a–z"
+            <button class:active=move || sort.get() == Sort::Az on:click=move |_| choose(Sort::Az) aria-label="Sort A to Z">
+                "A–Z"
             </button>
             <button
                 class:active=move || sort.get() == Sort::SonScore
                 on:click=move |_| choose(Sort::SonScore)
-            >
-                "sun level"
+             aria-label="Sort by sun level">
+                "Sun"
             </button>
-            <DensityToggle density=density set_density=set_density/>
         </div>
 
         <Suspense fallback=|| view! { <GridSkeleton/> }>
@@ -140,11 +145,12 @@ pub fn Gallery() -> impl IntoView {
                         Ok(page) => {
                             if page.sons.is_empty() {
                                 return view! {
-                                    <section class="empty">
-                                        <h2>"No sons yet."</h2>
-                                        <p>"The collection is empty. Be the first father."</p>
-                                        <a class="btn" href="/upload">"contribute a son"</a>
-                                    </section>
+                                    <EmptyState
+                                        icon=LuImage
+                                        message="No sons yet."
+                                        action_href="/upload"
+                                        action_label="Contribute"
+                                    />
                                 }
                                     .into_any();
                             }
@@ -172,7 +178,7 @@ pub fn Gallery() -> impl IntoView {
         <div class="more" class:more--hidden=move || is_empty.get()>
             <Show
                 when=move || !exhausted.get()
-                fallback=|| view! { <p class="exhausted">"That's every son. For now."</p> }
+                fallback=|| ()
             >
                 // Fires "more sons" automatically once scrolled near, ahead of
                 // the button below -- which stays for anyone who'd rather

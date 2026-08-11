@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
+use crate::components::icon::{Ico, LuCheck, LuCircleAlert, LuCloudUpload};
 use crate::models::UploadResult;
 use crate::seo::absolute;
 
@@ -97,18 +98,19 @@ pub fn Upload() -> impl IntoView {
     };
 
     view! {
-        <Title text="contribute a son — son collection"/>
+        <Title text="Contribute — son collection"/>
         <Meta
             name="description"
-            content="Contribute a son to the collection. Free, no account required — every upload is auto-moderated and published immediately."
+            content="Contribute a son to the collection."
         />
         <Link rel="canonical" href=absolute("/upload")/>
 
         <section class="upload">
-            <h1>"contribute a son"</h1>
-            <p class="sub">
-                "Free, no account. Everything is checked before it goes live, then published immediately."
-            </p>
+            // Just the task name. The paragraph that used to sit here narrated
+            // the service ("Free, no account. Everything is checked before it
+            // goes live…") -- none of which a visitor needs in order to pick a
+            // file, so it is gone rather than reworded.
+            <h1 class="page-title">"Contribute"</h1>
 
             <form on:submit=submit class="upload-form">
                 <label class="drop">
@@ -123,8 +125,15 @@ pub fn Upload() -> impl IntoView {
                         fallback=|| {
                             view! {
                                 <span class="drop-hint">
-                                    <strong>"choose a son"</strong>
-                                    <small>"png, jpeg, webp, gif — up to 12MB"</small>
+                                    <span class="drop-icon">
+                                        <Ico icon=LuCloudUpload size=26/>
+                                    </span>
+                                    <strong>"Choose a file"</strong>
+                                    // Kept: the format/size line prevents a
+                                    // failed upload, and these values mirror
+                                    // MAX_UPLOAD_BYTES and the accept list
+                                    // rather than being restated by hand.
+                                    <small>"PNG, JPG, WEBP, GIF · 12 MB max"</small>
                                 </span>
                             }
                         }
@@ -140,13 +149,13 @@ pub fn Upload() -> impl IntoView {
                 <input
                     class="title-input"
                     type="text"
-                    placeholder="name this son (e.g. Capri-Son)"
+                    placeholder="Name this son"
                     maxlength="80"
                     node_ref=title_input
                 />
 
                 <button class="btn" type="submit" disabled=move || busy.get()>
-                    {move || if busy.get() { "assessing sonness…" } else { "upload son" }}
+                    {move || if busy.get() { "Uploading…" } else { "Upload" }}
                 </button>
             </form>
 
@@ -157,9 +166,11 @@ pub fn Upload() -> impl IntoView {
                         UploadResult::Ok { son } => {
                             view! {
                                 <div class="outcome ok">
-                                    <h2>"Welcome to the family."</h2>
-                                    <p>{son.title.clone()} " scored " {son.sonness_label()} "."</p>
-                                    <A href=format!("/son/{}", son.id)>"see the son"</A>
+                                    <span class="outcome-icon">
+                                        <Ico icon=LuCheck size=18/>
+                                    </span>
+                                    <p class="outcome-msg">"Uploaded"</p>
+                                    <A href=format!("/son/{}", son.id) attr:class="btn">"View son"</A>
                                 </div>
                             }
                                 .into_any()
@@ -167,8 +178,10 @@ pub fn Upload() -> impl IntoView {
                         UploadResult::Rejected { reason, son_score, nsfw_score } => {
                             view! {
                                 <div class="outcome rejected">
-                                    <h2>"Not a son."</h2>
-                                    <p>{reason}</p>
+                                    <span class="outcome-icon">
+                                        <Ico icon=LuCircleAlert size=18/>
+                                    </span>
+                                    <p class="outcome-msg">{reason}</p>
                                     <p class="scores">
                                         {format!(
                                             "sonness {:.0}% · nsfw {:.0}%",
@@ -183,8 +196,10 @@ pub fn Upload() -> impl IntoView {
                         UploadResult::Error { message } => {
                             view! {
                                 <div class="outcome error">
-                                    <h2>"Something went wrong."</h2>
-                                    <p>{message}</p>
+                                    <span class="outcome-icon">
+                                        <Ico icon=LuCircleAlert size=18/>
+                                    </span>
+                                    <p class="outcome-msg">{message}</p>
                                 </div>
                             }
                                 .into_any()

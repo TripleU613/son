@@ -1,5 +1,7 @@
 use leptos::prelude::*;
 
+use crate::components::icon::{Ico, LuFlag};
+
 use crate::api::report_son;
 use crate::models::ReportReason;
 
@@ -29,8 +31,13 @@ pub fn ReportForm(son_id: String) -> impl IntoView {
                 when=move || open.get()
                 fallback=move || {
                     view! {
-                        <button class="btn-quiet" on:click=move |_| set_open.set(true)>
-                            "this is not a son / report"
+                        <button
+                            class="btn-quiet"
+                            on:click=move |_| set_open.set(true)
+                            aria-label="Report this son"
+                        >
+                            <Ico icon=LuFlag size=15/>
+                            <span>"Report"</span>
                         </button>
                     }
                 }
@@ -73,7 +80,7 @@ pub fn ReportForm(son_id: String) -> impl IntoView {
                             {move || if report.pending().get() { "flagging…" } else { "submit report" }}
                         </button>
                         <button class="link-btn" on:click=move |_| set_open.set(false)>
-                            "cancel"
+                            "Cancel"
                         </button>
                     </div>
                 </div>
