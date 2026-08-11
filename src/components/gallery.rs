@@ -1,3 +1,4 @@
+use crate::app::SitePreview;
 use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 
@@ -116,6 +117,7 @@ pub fn Gallery() -> impl IntoView {
 
     view! {
         <Title text="son collection — every son, collected"/>
+        <SitePreview/>
         <Meta name="description" content=DESCRIPTION/>
         <Link rel="canonical" href=absolute("/")/>
 

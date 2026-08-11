@@ -1,3 +1,4 @@
+use crate::app::SitePreview;
 use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 
@@ -12,6 +13,7 @@ pub fn Leaderboard() -> impl IntoView {
 
     view! {
         <Title text="Leaderboard — son collection"/>
+        <SitePreview/>
         <Meta
             name="description"
             content="Top contributors to the son collection."

@@ -1,3 +1,4 @@
+use crate::app::SitePreview;
 use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 
@@ -15,6 +16,7 @@ use crate::seo::absolute;
 pub fn Privacy() -> impl IntoView {
     view! {
         <Title text="privacy policy — son collection"/>
+        <SitePreview/>
         <Meta
             name="description"
             content="What son collection collects, why, and who it's shared with."
@@ -99,6 +101,7 @@ pub fn Privacy() -> impl IntoView {
 pub fn Terms() -> impl IntoView {
     view! {
         <Title text="terms of service — son collection"/>
+        <SitePreview/>
         <Meta name="description" content="The rules for using and contributing to son collection."/>
         <Link rel="canonical" href=absolute("/tos")/>
 

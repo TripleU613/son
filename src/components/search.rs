@@ -1,3 +1,4 @@
+use crate::app::SitePreview;
 use leptos::prelude::*;
 use leptos_meta::{Meta, Title};
 use leptos_router::hooks::use_query_map;
@@ -30,6 +31,7 @@ pub fn SearchPage() -> impl IntoView {
             let q = q();
             if q.is_empty() { "search — son collection".to_string() } else { format!("\"{q}\" — son collection") }
         }/>
+        <SitePreview/>
         // Query-dependent results have no stable content worth a search
         // engine's crawl budget or a snippet -- `follow` still lets a
         // crawler reach every son a result links to.

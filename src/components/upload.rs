@@ -1,3 +1,4 @@
+use crate::app::SitePreview;
 use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
@@ -211,6 +212,7 @@ pub fn Upload() -> impl IntoView {
 
     view! {
         <Title text="Contribute — son collection"/>
+        <SitePreview/>
         <Meta
             name="description"
             content="Contribute a son to the collection."

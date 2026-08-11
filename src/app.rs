@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, HashedStylesheet, MetaTags, Title};
+use leptos_meta::{provide_meta_context, HashedStylesheet, Meta, MetaTags, Title};
 use leptos_router::components::{Route, Router, Routes, A};
 use leptos_router::hooks::use_location;
 use leptos_router::{path, SsrMode};
@@ -57,11 +57,6 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 // home screen.
                 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"/>
                 <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
-                // The bigger mark, for link previews on pages that have no image
-                // of their own to show (everything except a son's own page,
-                // which overrides these in SonDetail).
-                <meta property="og:image" content="/logo-large.png"/>
-                <meta property="og:site_name" content="son collection"/>
                 <meta name="theme-color" content="#08090b"/>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options=options.clone()/>
@@ -102,6 +97,7 @@ pub fn App() -> impl IntoView {
 
     view! {
         <Title text="son collection"/>
+        <Meta property="og:site_name" content="son collection"/>
 
         <Router>
             // One shell, rearranged entirely by CSS. The primary nav exists
@@ -401,6 +397,24 @@ fn urlencode(s: &str) -> String {
             _ => format!("%{:02X}", c as u32),
         })
         .collect()
+}
+
+/// The site logo as this page's link-preview image, for pages that have no image
+/// of their own.
+///
+/// Deliberately opt-in per page rather than a default in `App`, because
+/// leptos_meta resolves a duplicated `og:image` first-set-wins: a default here
+/// silently beat `SonDetail`'s own tag and every son previewed as the site logo.
+/// Raw markup in `shell` is worse still -- it cannot be overridden at all, and
+/// produced two `og:image` tags where an unfurler picks whichever it likes.
+///
+/// Absolute, because unfurlers reject a relative `og:image` outright.
+#[component]
+pub fn SitePreview() -> impl IntoView {
+    view! {
+        <Meta property="og:image" content=crate::seo::absolute("/logo-large.png")/>
+        <Meta property="og:type" content="website"/>
+    }
 }
 
 /// Set the response status during SSR.
