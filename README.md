@@ -110,15 +110,25 @@ deploy/known_hosts   bulky-server's pinned SSH host key (public info, safe to co
 
 Screening happens in **Gemini**, reached through the Python sidecar in `sidecar/`
 (`HanaokaYuzu/Gemini-API`, driven with browser cookies rather than an API key).
-Two calls per upload:
+Two endpoints, one Gemini call each:
 
-1. **Judge** — two plain lines back: `PASS`/`FAIL`, then `SON`/`NOTSON`. No JSON
-   schema; there are two questions with two answers each.
-2. **Regenerate** — a square version of the image, which is what gets published.
+| | takes | returns |
+| --- | --- | --- |
+| `POST /judge` | ~3s | `{"verdict": "PASS"\|"FAIL", "topic": "SON"\|"NOTSON"}` |
+| `POST /square` | ~30-80s | the square image |
 
-They are separate calls because a single prompt asking for both makes the model
-answer in prose and refuse the image ("I cannot generate, edit, or modify
-images"). Judging first also means an unsafe upload never costs a generation.
+Two calls rather than one prompt doing both, because a single prompt asking it to
+judge *and* generate makes the model answer in prose and refuse the image ("I
+cannot generate, edit, or modify images").
+
+Two *endpoints* rather than one, because judging is seconds and generating is most
+of a minute: the upload page reports which phase it is in, and a refusal comes
+back in ~4s instead of waiting behind a generation that was going to be discarded.
+
+The policy lives in `Verdict::acceptable`, not in the sidecar's status codes. It
+fails closed — anything that is not an explicit `PASS` is a refusal — and the
+visitor-facing reasons are written in Rust rather than echoed from the model, so
+nothing it generates is ever rendered on the page.
 
 `GEMINI_URL` unset ⇒ the step is skipped entirely and uploads publish unscreened.
 Gemini unreachable ⇒ **the original is published unscreened** rather than the

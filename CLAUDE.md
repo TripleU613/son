@@ -181,6 +181,11 @@ the Rust client. Things that will bite you there:
 
 - **Two Gemini calls, never one.** A prompt that asks it to judge *and* generate
   makes it answer in prose: "I cannot generate, edit, or modify images."
+- **Two endpoints, never one.** `/judge` is ~3s, `/square` is ~30-80s. Behind one
+  endpoint the app can only label the whole wait "Scanning", and a refusal has to
+  wait out a generation it is about to throw away.
+- **The accept/refuse policy is `Verdict::acceptable`**, not HTTP status codes.
+  Fail closed, and never render the model's own words at a visitor.
 - **Upload files by path, not `BytesIO`.** `gemini_webapi`'s uploader needs an
   explicit filename for in-memory data and `generate_content` gives no way to
   pass one, so a BytesIO silently attaches nothing and the model then describes
