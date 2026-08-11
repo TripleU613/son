@@ -14,6 +14,8 @@ pub mod moderation;
 #[cfg(feature = "ssr")]
 pub mod oauth_route;
 #[cfg(feature = "ssr")]
+pub mod public_route;
+#[cfg(feature = "ssr")]
 pub mod storage;
 #[cfg(feature = "ssr")]
 pub mod upload_route;

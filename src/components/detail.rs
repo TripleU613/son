@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_meta::{Meta, Title};
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 
@@ -81,6 +81,21 @@ pub fn SonDetail() -> impl IntoView {
                                 <Meta property="og:image" content=absolute(&s.orig_url)/>
                                 <Meta property="og:type" content="image"/>
                                 <Meta name="twitter:card" content="summary_large_image"/>
+                                // oEmbed discovery: lets embedders that check
+                                // <link rel="alternate"> (WordPress, many wikis)
+                                // find this without knowing the endpoint shape
+                                // up front, the way Discord/Twitter's OG parsing
+                                // already does implicitly.
+                                <Link
+                                    rel="alternate"
+                                    type_="application/json+oembed"
+                                    title=s.title.clone()
+                                    href=format!(
+                                        "{}?url={}",
+                                        absolute("/oembed"),
+                                        absolute(&format!("/son/{}", s.id)),
+                                    )
+                                />
 
                                 <article class="detail">
                                     <img
@@ -115,6 +130,13 @@ pub fn SonDetail() -> impl IntoView {
                                                 }}
                                             </dd>
                                         </dl>
+
+                                        <a
+                                            class="download-btn"
+                                            href=format!("/son/{}/download", s.id)
+                                        >
+                                            "download"
+                                        </a>
 
                                         <ReportForm son_id=s.id.clone()/>
                                     </div>

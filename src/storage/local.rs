@@ -29,6 +29,10 @@ impl Backend for LocalDisk {
         Ok(())
     }
 
+    async fn get(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        Ok(tokio::fs::read(local_path(&self.root, key)).await?)
+    }
+
     async fn delete(&self, key: &str) {
         let _ = tokio::fs::remove_file(local_path(&self.root, key)).await;
     }

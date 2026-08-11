@@ -66,6 +66,18 @@ async fn main() -> anyhow::Result<()> {
             get(soncollection::oauth_route::callback),
         )
         .route("/auth/logout", post(soncollection::oauth_route::logout))
+        // A stable, documented public API -- unlike the server fns below,
+        // whose paths are hashed and change on every rebuild.
+        .route("/api/v1/sons", get(soncollection::public_route::list_sons))
+        .route(
+            "/api/v1/sons/{id}",
+            get(soncollection::public_route::get_son),
+        )
+        .route("/oembed", get(soncollection::public_route::oembed))
+        .route(
+            "/son/{id}/download",
+            get(soncollection::public_route::download),
+        )
         .route(
             "/api/{*fn_name}",
             axum::routing::any(leptos_axum::handle_server_fns),

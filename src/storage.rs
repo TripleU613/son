@@ -27,6 +27,14 @@ const MAX_PIXELS: u64 = 40_000_000;
 pub trait Backend: Send + Sync + 'static {
     async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> anyhow::Result<()>;
 
+    /// Fetch an object's bytes back. Used only for the same-origin download
+    /// route (`Content-Disposition: attachment` has to come from a response
+    /// this server controls -- browsers ignore an `<a download>` attribute
+    /// pointed at a cross-origin URL, and R2's public domain is a different
+    /// origin from the app itself). Normal viewing never calls this; the
+    /// gallery links straight to the CDN.
+    async fn get(&self, key: &str) -> anyhow::Result<Vec<u8>>;
+
     /// Best-effort: a missing object is not an error, since the goal of calling
     /// this is for the object to be gone.
     async fn delete(&self, key: &str);

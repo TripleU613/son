@@ -96,6 +96,23 @@ impl Backend for R2 {
         Ok(())
     }
 
+    async fn get(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        let resp = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("R2 get {key} failed: {e}"))?;
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("R2 get {key}: could not read body: {e}"))?;
+        Ok(bytes.to_vec())
+    }
+
     async fn delete(&self, key: &str) {
         if let Err(e) = self
             .client
