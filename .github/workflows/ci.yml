@@ -39,74 +39,72 @@ jobs:
       - name: test
         run: cargo test --no-default-features --features ssr
 
+  # Builds the production image. The Dockerfile's own builder stage runs the
+  # real `cargo leptos build --release` -- there used to be a second, separate
+  # compile here that produced a raw binary just to throw it away as a 7-day
+  # Actions artifact, duplicating the entire Rust build for no reason. This
+  # job's image *is* the artifact now: on `main` it's the thing that actually
+  # gets deployed, and on a PR it's still built (validating the Dockerfile)
+  # but discarded rather than pushed, since a fork PR's restricted token
+  # cannot authenticate to the registry anyway.
   build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: install cargo-leptos
-        run: cargo install cargo-leptos --locked
-
-      # No D1/R2 credentials here on purpose: the app talks to them entirely
-      # over HTTP at runtime (no query! macros, no compile-time schema check),
-      # so a plain build needs no secrets and a fresh clone builds identically.
-      - name: build release
-        run: cargo leptos build --release
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: site
-          path: |
-            target/release/soncollection
-            target/site
-          retention-days: 7
-
-  # Builds the production image and deploys it to bulky-server. Only runs for
-  # pushes to main (never for pull_request, including from forks) -- that
-  # trigger has no access to secrets, and this job needs several.
-  deploy:
-    needs: [check, build]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      # A digest reference (@sha256:...), not a tag: tags can be moved, even
+      # by accident; a digest cannot, so deploy is guaranteed to run exactly
+      # what this job built, not whatever ":<sha>" happens to point to later.
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
       # OCI/Docker tags must be all-lowercase; github.repository preserves the
       # repo's actual case (TripleU613/son), which buildx correctly rejects.
-      # Computed once here rather than repeating a shell lowercase in every
-      # place the image reference is needed below.
       - name: compute lowercase image repository
         id: repo
         run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: build and push image
-        id: image
+      - name: build image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          # Only pushed on main: a PR build validates the Dockerfile still
+          # builds and nothing more.
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
             ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
             ghcr.io/${{ steps.repo.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: resolve image reference
+        id: ref
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo "image=ghcr.io/${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  # Deploys the image build() just produced to bulky-server. Only runs for
+  # pushes to main (never for pull_request, including from forks) -- that
+  # trigger has no access to secrets, and this job needs several.
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       # bulky-server has no public inbound port at all -- it is reachable only
       # over this tailnet, the same way this runner reaches it to deploy.
@@ -128,8 +126,13 @@ jobs:
         # identity IS the credential (see tailnet ACL's "ssh" section), not a
         # keypair -- so no private key is loaded here, only the host-key pin
         # above and this runner's own tag:ci membership from the step before.
+        #
+        # The env list below is the single place a new secret needs adding --
+        # both the local export block and the two docker compose commands read
+        # from it, so a new variable in docker-compose.yml only needs adding
+        # here once, not once per command.
         env:
-          SON_IMAGE: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+          SON_IMAGE: ${{ needs.build.outputs.image }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           CF_D1_API_TOKEN: ${{ secrets.CF_D1_API_TOKEN }}
@@ -138,29 +141,23 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
           CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
           scp docker-compose.yml root@bulky-server:/opt/son/docker-compose.yml
+
+          VARS="SON_IMAGE CF_ACCOUNT_ID CF_D1_DATABASE_ID CF_D1_API_TOKEN \
+                R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE \
+                CF_TUNNEL_TOKEN SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET"
+          EXPORTS=""
+          for v in $VARS; do
+            EXPORTS="$EXPORTS $v='${!v}'"
+          done
+
           ssh root@bulky-server \
-            "SON_IMAGE='$SON_IMAGE' \
-             CF_ACCOUNT_ID='$CF_ACCOUNT_ID' \
-             CF_D1_DATABASE_ID='$CF_D1_DATABASE_ID' \
-             CF_D1_API_TOKEN='$CF_D1_API_TOKEN' \
-             R2_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID' \
-             R2_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY' \
-             R2_BUCKET='$R2_BUCKET' \
-             R2_PUBLIC_BASE='$R2_PUBLIC_BASE' \
-             CF_TUNNEL_TOKEN='$CF_TUNNEL_TOKEN' \
-             docker compose -f /opt/son/docker-compose.yml pull && \
-             SON_IMAGE='$SON_IMAGE' \
-             CF_ACCOUNT_ID='$CF_ACCOUNT_ID' \
-             CF_D1_DATABASE_ID='$CF_D1_DATABASE_ID' \
-             CF_D1_API_TOKEN='$CF_D1_API_TOKEN' \
-             R2_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID' \
-             R2_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY' \
-             R2_BUCKET='$R2_BUCKET' \
-             R2_PUBLIC_BASE='$R2_PUBLIC_BASE' \
-             CF_TUNNEL_TOKEN='$CF_TUNNEL_TOKEN' \
-             docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"
+            "$EXPORTS docker compose -f /opt/son/docker-compose.yml pull && \
+             $EXPORTS docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"
       # No secret value is ever written to a file on bulky-server: each is a
       # shell-local env var for exactly the two commands above, passed
       # straight through to docker compose's own ${VAR} interpolation, and

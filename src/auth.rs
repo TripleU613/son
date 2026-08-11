@@ -41,8 +41,18 @@ fn session_key() -> Option<Key> {
     Some(Key::derive_from(secret.as_bytes()))
 }
 
+/// Like `std::env::var`, but treats an empty string as absent.
+///
+/// Compose's `${VAR:-}` interpolation sets the container's env var to an
+/// empty string when the underlying secret doesn't exist yet, rather than
+/// omitting it — `std::env::var` alone would see that as `Ok("")`, not `Err`,
+/// and wrongly conclude Google sign-in is configured.
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 pub fn google_configured() -> bool {
-    std::env::var("GOOGLE_CLIENT_ID").is_ok() && std::env::var("GOOGLE_CLIENT_SECRET").is_ok()
+    non_empty_env("GOOGLE_CLIENT_ID").is_some() && non_empty_env("GOOGLE_CLIENT_SECRET").is_some()
 }
 
 fn secure_cookies() -> bool {
@@ -78,7 +88,7 @@ struct FlowState {
 /// Build the redirect to Google's consent screen, plus the `Set-Cookie` value
 /// that must accompany it. Returns `None` if Google sign-in isn't configured.
 pub fn start_login(return_to: &str) -> Option<(String, String)> {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID").ok()?;
+    let client_id = non_empty_env("GOOGLE_CLIENT_ID")?;
     let key = session_key()?;
 
     let pkce_verifier = random_url_safe(64);
@@ -135,8 +145,10 @@ pub async fn complete_login(
     query_state: &str,
 ) -> anyhow::Result<LoginResult> {
     let key = session_key().ok_or_else(|| anyhow::anyhow!("SESSION_SECRET not configured"))?;
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")?;
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")?;
+    let client_id = non_empty_env("GOOGLE_CLIENT_ID")
+        .ok_or_else(|| anyhow::anyhow!("GOOGLE_CLIENT_ID not configured"))?;
+    let client_secret = non_empty_env("GOOGLE_CLIENT_SECRET")
+        .ok_or_else(|| anyhow::anyhow!("GOOGLE_CLIENT_SECRET not configured"))?;
 
     let jar = parse_jar(cookie_header);
     let flow_cookie = jar
