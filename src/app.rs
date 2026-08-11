@@ -9,6 +9,8 @@ use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
 use crate::components::leaderboard::Leaderboard;
+use crate::components::search::SearchPage;
+use crate::components::tag_page::TagPage;
 use crate::components::upload::Upload;
 
 /// The HTML document. Server-side only entry point; `HydrationScripts` injects
@@ -52,6 +54,8 @@ pub fn App() -> impl IntoView {
                     // No server data; streaming is fine here.
                     <Route path=path!("/upload") view=Upload/>
                     <Route path=path!("/leaderboard") view=Leaderboard ssr=SsrMode::Async/>
+                    <Route path=path!("/tag/:slug") view=TagPage ssr=SsrMode::Async/>
+                    <Route path=path!("/search") view=SearchPage ssr=SsrMode::Async/>
                     // Not SsrMode::Async: it carries no SEO-relevant content
                     // and is gated server-side in every fn it calls anyway, so
                     // there is nothing here for out-of-order streaming to leak.
@@ -80,6 +84,12 @@ fn Nav() -> impl IntoView {
                 <A href="/">"gallery"</A>
                 <A href="/upload">"contribute a son"</A>
                 <A href="/leaderboard">"leaderboard"</A>
+                // A plain GET form, not a JS-driven search-as-you-type: it
+                // works with hydration not yet loaded, and /search's own
+                // results render server-side from the query string either way.
+                <form method="get" action="/search" class="nav-search">
+                    <input type="search" name="q" placeholder="search sons…" maxlength="100"/>
+                </form>
                 <Suspense fallback=|| ()>
                     {move || {
                         user.get()

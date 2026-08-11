@@ -5,4 +5,6 @@ pub mod gallery;
 pub mod leaderboard;
 pub mod like;
 pub mod report;
+pub mod search;
+pub mod tag_page;
 pub mod upload;
