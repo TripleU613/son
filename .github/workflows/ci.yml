@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on warnings so dead code doesn't accumulate in a public repo.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      # Both halves are checked separately: the two feature sets compile
+      # disjoint code, so a green ssr build says nothing about the wasm one.
+      - name: clippy (server)
+        run: cargo clippy --no-default-features --features ssr -- -D warnings
+
+      - name: clippy (wasm)
+        run: >
+          cargo clippy --no-default-features --features hydrate
+          --target wasm32-unknown-unknown -- -D warnings
+
+      - name: test
+        run: cargo test --no-default-features --features ssr
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install cargo-leptos
+        run: cargo install cargo-leptos --locked
+
+      # No DATABASE_URL on purpose. Queries are runtime-checked rather than
+      # using sqlx::query!, so a fresh clone builds with no database present.
+      - name: build release
+        run: cargo leptos build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: |
+            target/release/soncollection
+            target/site
+          retention-days: 7

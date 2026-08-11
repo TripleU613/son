@@ -1,0 +1,21 @@
+pub mod api;
+pub mod app;
+pub mod components;
+pub mod models;
+
+#[cfg(feature = "ssr")]
+pub mod db;
+#[cfg(feature = "ssr")]
+pub mod moderation;
+#[cfg(feature = "ssr")]
+pub mod storage;
+#[cfg(feature = "ssr")]
+pub mod upload_route;
+
+/// Wasm entry point. `cargo-leptos` wires this into the generated JS loader.
+#[cfg(feature = "hydrate")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn hydrate() {
+    console_error_panic_hook::set_once();
+    leptos::mount::hydrate_body(app::App);
+}

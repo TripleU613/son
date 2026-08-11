@@ -1,0 +1,7 @@
+/target
+/uploads/orig/*
+/uploads/thumb/*
+!/uploads/orig/.gitkeep
+!/uploads/thumb/.gitkeep
+sons.db*
+.env
