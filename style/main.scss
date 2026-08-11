@@ -12,6 +12,23 @@
   --danger: #ff5f6b;
   --ok: #4ee39a;
   --radius: 14px;
+  --font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  // A distinct, condensed display face for the brand and headings, so the
+  // site reads as its own thing rather than "default system font, dark
+  // mode." Self-hosted (see public/fonts/) rather than linked from Google's
+  // CDN at runtime -- no third-party request on every page load, and no
+  // dependency on Google's fonts.googleapis.com staying reachable.
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  // A variable font: one file covers the whole 500-700 weight range Google's
+  // own CSS API serves it under, rather than one file per weight.
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-variable.woff2") format("woff2");
 }
 
 * { box-sizing: border-box; }
@@ -20,8 +37,12 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
+}
+
+h1, h2, .brand {
+  font-family: var(--font-display);
 }
 
 a { color: inherit; text-decoration: none; }
@@ -48,11 +69,16 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  font-weight: 800;
+  // 700, not 800: the self-hosted display face only covers the 500-700
+  // weight range it was fetched at, and a weight outside that range falls
+  // back to the next font in the stack instead of clamping to the nearest
+  // available weight.
+  font-weight: 700;
   font-size: 1.5rem;
   letter-spacing: -0.02em;
 }
 
+.brand-word { color: var(--accent); }
 .brand-tears { font-size: 0.85rem; }
 
 .nav-links {
@@ -396,12 +422,42 @@ a { color: inherit; text-decoration: none; }
 .error { color: var(--danger); }
 
 .foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   max-width: 1180px;
   margin: 0 auto;
   padding: 30px 20px 60px;
   border-top: 1px solid var(--line);
   color: var(--ink-dim);
   font-size: 0.85rem;
+}
+
+.foot-links {
+  display: flex;
+  gap: 16px;
+
+  a:hover { color: var(--accent); }
+}
+
+/* ---------- legal pages ---------- */
+.legal {
+  max-width: 70ch;
+  padding-top: 20px;
+
+  h1 { margin: 0 0 6px; font-size: 2rem; letter-spacing: -0.02em; }
+  h2 { margin: 28px 0 8px; font-size: 1.2rem; letter-spacing: -0.01em; }
+  p, li { color: var(--ink-dim); line-height: 1.6; }
+  ul { padding-left: 20px; margin: 8px 0; }
+  li { margin: 4px 0; }
+}
+
+.legal-updated {
+  font-size: 0.85rem;
+  font-style: italic;
+  margin: 0 0 24px;
 }
 
 /* ---------- sort bar ---------- */

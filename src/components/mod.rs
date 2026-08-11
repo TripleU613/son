@@ -5,6 +5,7 @@ pub mod detail;
 pub mod gallery;
 pub mod infinite_scroll;
 pub mod leaderboard;
+pub mod legal;
 pub mod like;
 pub mod report;
 pub mod search;

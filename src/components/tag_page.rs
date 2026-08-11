@@ -23,6 +23,24 @@ pub fn TagPage() -> impl IntoView {
     let (cursor, set_cursor) = signal(Option::<String>::None);
     let (exhausted, set_exhausted) = signal(false);
 
+    // Seeds cursor/exhausted once the first page resolves. An Effect, not a
+    // side effect inside the view-producing closure below -- see the
+    // matching comment in gallery.rs for why: a signal write during render
+    // can leave the server's rendered HTML and the client's first hydration
+    // pass disagreeing about which branch of the `<Show>` below is active,
+    // which crashes the whole wasm module on any tag with fewer than
+    // `PAGE_SIZE` sons.
+    Effect::new(move |_| {
+        if let Some(Ok(page)) = first.get() {
+            if cursor.get_untracked().is_none() && !exhausted.get_untracked() {
+                match page.next_cursor {
+                    Some(c) => set_cursor.set(Some(c)),
+                    None => set_exhausted.set(true),
+                }
+            }
+        }
+    });
+
     let load_more = Action::new(move |_: &()| {
         let s = slug();
         let from = cursor.get_untracked();
@@ -67,13 +85,6 @@ pub fn TagPage() -> impl IntoView {
                     .map(|res| match res {
                         Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         Ok(page) => {
-                            if cursor.get_untracked().is_none() && !exhausted.get_untracked() {
-                                match &page.next_cursor {
-                                    Some(c) => set_cursor.set(Some(c.clone())),
-                                    None => set_exhausted.set(true),
-                                }
-                            }
-
                             if page.sons.is_empty() {
                                 return view! {
                                     <section class="empty">

@@ -34,6 +34,27 @@ pub fn Gallery() -> impl IntoView {
     let (cursor, set_cursor) = signal(Option::<String>::None);
     let (exhausted, set_exhausted) = signal(false);
 
+    // Seeds cursor/exhausted once the first page resolves. An Effect, not a
+    // side effect inside the view-producing closure below: a signal write
+    // during render can leave the server's rendered HTML and the client's
+    // first hydration pass disagreeing about which branch of the `<Show>`
+    // near the bottom is active, since the server has no equivalent
+    // "post-render" phase to run it in and so never sees it at all. Found
+    // via a real crash -- any gallery with fewer than `PAGE_SIZE` sons
+    // (every brand-new deployment, on day one) hit a hydration panic that
+    // took down the whole wasm module. Effects are already client-only by
+    // design, so this can't happen here.
+    Effect::new(move |_| {
+        if let Some(Ok(page)) = first.get() {
+            if cursor.get_untracked().is_none() && !exhausted.get_untracked() {
+                match page.next_cursor {
+                    Some(c) => set_cursor.set(Some(c)),
+                    None => set_exhausted.set(true),
+                }
+            }
+        }
+    });
+
     let load_more = Action::new(move |_: &()| {
         let from = cursor.get_untracked();
         let s = sort.get_untracked();
@@ -110,15 +131,6 @@ pub fn Gallery() -> impl IntoView {
                                 .into_any()
                         }
                         Ok(page) => {
-                            // Seed the cursor once the first page is known, so
-                            // "more sons" continues from the right place.
-                            if cursor.get_untracked().is_none() && !exhausted.get_untracked() {
-                                match &page.next_cursor {
-                                    Some(c) => set_cursor.set(Some(c.clone())),
-                                    None => set_exhausted.set(true),
-                                }
-                            }
-
                             if page.sons.is_empty() {
                                 return view! {
                                     <section class="empty">

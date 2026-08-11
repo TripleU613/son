@@ -9,9 +9,18 @@ use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
 use crate::components::leaderboard::Leaderboard;
+use crate::components::legal::{Privacy, Terms};
 use crate::components::search::SearchPage;
 use crate::components::tag_page::TagPage;
 use crate::components::upload::Upload;
+
+/// An inline SVG favicon (the crying-face emoji on the accent yellow) --
+/// no image asset to generate or keep in sync with the brand color, and it
+/// renders crisp at every size browsers ask for.
+const FAVICON: &str = "data:image/svg+xml,\
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
+<text y='.9em' font-size='90'>%F0%9F%98%AD</text>\
+</svg>";
 
 /// The HTML document. Server-side only entry point; `HydrationScripts` injects
 /// the wasm loader so the client picks up where SSR left off.
@@ -22,6 +31,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <link rel="icon" href=FAVICON/>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options/>
                 <MetaTags/>
@@ -60,10 +70,16 @@ pub fn App() -> impl IntoView {
                     // and is gated server-side in every fn it calls anyway, so
                     // there is nothing here for out-of-order streaming to leak.
                     <Route path=path!("/admin") view=Admin/>
+                    <Route path=path!("/privacy") view=Privacy/>
+                    <Route path=path!("/tos") view=Terms/>
                 </Routes>
             </main>
             <footer class="foot">
                 <span>"every image is somebody's son"</span>
+                <nav class="foot-links">
+                    <A href="/privacy">"privacy"</A>
+                    <A href="/tos">"terms"</A>
+                </nav>
             </footer>
         </Router>
     }

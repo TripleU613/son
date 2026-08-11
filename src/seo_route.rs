@@ -88,6 +88,8 @@ pub async fn sitemap_xml() -> impl IntoResponse {
         ("/", "1.0", "hourly"),
         ("/leaderboard", "0.5", "daily"),
         ("/upload", "0.3", "monthly"),
+        ("/privacy", "0.1", "yearly"),
+        ("/tos", "0.1", "yearly"),
     ] {
         xml.push_str(&format!(
             "  <url><loc>{origin}{path}</loc><changefreq>{changefreq}</changefreq><priority>{priority}</priority></url>\n"
