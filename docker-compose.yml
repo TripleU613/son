@@ -8,10 +8,15 @@
 # this file defines -- nothing on bulky-server needs an inbound firewall rule
 # for web traffic, matching how it is already reached only over Tailscale SSH.
 #
-# Every value below except the two image references comes from the calling
-# shell's environment, populated by the CI deploy step from GitHub Actions
-# secrets. Nothing is written to a .env file on the server or baked into
-# either image -- see .github/workflows/deploy.yml.
+# Every value below except the image references comes from the calling shell's
+# environment, populated by the CI deploy step from GitHub Actions secrets.
+# Nothing is written to a .env file on the server or baked into any image --
+# see .github/workflows/ci.yml.
+#
+# Three containers: the app, the Gemini sidecar it calls for screening, and
+# cloudflared. Only cloudflared reaches the outside world inbound; the sidecar
+# publishes no port and is reachable solely as `gemini` on the private network,
+# which matters more for it than for the app -- it holds Google session cookies.
 
 services:
   son-app:
@@ -62,6 +67,48 @@ services:
       # rather than failing to start -- so this file doesn't wait on that.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Comma-separated. Re-checked at every Google login, so this is the source
+      # of truth for who is an admin -- see db::upsert_user.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # Absent -> no analytics script is emitted at all. Cloudflare's edge-side
+      # request/bandwidth/threat numbers need nothing here.
+      CF_ANALYTICS_TOKEN: ${CF_ANALYTICS_TOKEN:-}
+      # The sidecar, by service name on the private network. Absent -> uploads
+      # publish unscreened, so this is left explicit rather than defaulted.
+      GEMINI_URL: ${GEMINI_URL:-http://gemini:8099}
+    # Started but not waited on: `service_started` rather than
+    # `service_healthy`, because the sidecar's healthcheck needs ~90s to
+    # initialise its accounts and the gallery should be serving long before
+    # then. An upload arriving in that window publishes unscreened, which is the
+    # same behaviour as the sidecar being down -- deliberate, and logged.
+    depends_on:
+      gemini:
+        condition: service_started
+    networks: [son-net]
+
+  gemini:
+    image: ${GEMINI_IMAGE}
+    restart: unless-stopped
+    read_only: true
+    # Smaller than the app: this holds no images in memory beyond one upload at
+    # a time and spends its life waiting on Google. 512m is roughly 4x its
+    # observed idle footprint, which leaves room for a large upload without
+    # letting a leak take the host down.
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.5
+    # Writable /tmp is load-bearing here, not incidental: the uploaded image, the
+    # generated one, and gemini_webapi's cache of the rotated __Secure-1PSIDTS
+    # cookie all live there. tmpfs keeps "no storage on the server" true -- a
+    # restart re-derives the rotated cookie from the seed value below.
+    tmpfs:
+      - /tmp
+    environment:
+      # psid:psidts pairs, comma-separated for several accounts. The service
+      # round-robins over whichever ones initialise.
+      GEMINI_COOKIES: ${GEMINI_COOKIES}
+      GEMINI_TIMEOUT: "120"
+    # No `ports:`. Nothing outside this network has any business reaching it.
     networks: [son-net]
 
   cloudflared:
