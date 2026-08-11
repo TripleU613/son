@@ -3,6 +3,7 @@ pub mod card;
 pub mod density;
 pub mod detail;
 pub mod gallery;
+pub mod icon;
 pub mod infinite_scroll;
 pub mod leaderboard;
 pub mod legal;
