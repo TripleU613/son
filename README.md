@@ -110,9 +110,11 @@ not become an open door. `stub` detects nothing and has to be asked for by name.
 
 ### Weights
 
-`CLIP_MODEL_DIR` (default `models/clip-vit-base-patch32`) is checked first;
-`hf-hub` downloads from `openai/clip-vit-base-patch32` only as a dev
-convenience. Production should ship the weights, not fetch 600MB at boot.
+`CLIP_MODEL_DIR` (default `models/clip-vit-base-patch32`) must contain
+`pytorch_model.bin` and `tokenizer.json`. The app does **not** download them: an
+`hf-hub` dependency pulled in ureq → rustls 0.21 → rustls-webpki 0.101.7 and a
+HIGH advisory, to serve a path only used once per machine. Fetch them yourself,
+and ship them with the deploy rather than pulling 600MB at boot.
 
 That repo publishes **no safetensors** — only `pytorch_model.bin`, loaded via
 `VarBuilder::from_pth`. Preferred over a third-party safetensors mirror for a

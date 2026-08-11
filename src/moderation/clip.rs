@@ -91,12 +91,13 @@ const SON_PROMPTS: &[&str] = &[
 /// Default location for a checked-out copy of the weights.
 const DEFAULT_MODEL_DIR: &str = "models/clip-vit-base-patch32";
 
-/// Find the weights and tokenizer.
+/// Locate the weights and tokenizer on local disk.
 ///
-/// A local directory is preferred and tried first: a production server should
-/// not depend on Hugging Face being reachable at boot, and pulling 600MB lazily
-/// on the first request is not a real deployment story. `hf-hub` is the
-/// convenience path for a fresh dev machine.
+/// Deliberately does NOT download. An earlier version used `hf-hub`, which
+/// dragged in ureq → rustls 0.21 → rustls-webpki 0.101.7 and a HIGH advisory,
+/// for a code path only ever used to populate a dev machine once. Fetching
+/// 600MB lazily at boot was never a deployment story either, so the download is
+/// a documented `curl` in the README instead.
 fn locate_model() -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
     let dir = std::env::var("CLIP_MODEL_DIR").unwrap_or_else(|_| DEFAULT_MODEL_DIR.to_string());
     let dir = std::path::Path::new(&dir);
@@ -108,14 +109,13 @@ fn locate_model() -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
         return Ok((weights, tokenizer));
     }
 
-    tracing::info!(
-        "no local CLIP weights at {}; fetching {MODEL_REPO} from Hugging Face",
+    anyhow::bail!(
+        "CLIP weights not found in {}. Fetch them from {MODEL_REPO}:\n  \
+         mkdir -p {} && cd $_ && for f in pytorch_model.bin tokenizer.json; do \
+         curl -sLO \"https://huggingface.co/{MODEL_REPO}/resolve/main/$f\"; done",
+        dir.display(),
         dir.display()
-    );
-    let repo = hf_hub::api::sync::Api::new()?.model(MODEL_REPO.to_string());
-    // The official OpenAI repo publishes no safetensors, only a PyTorch
-    // checkpoint, so that is what both paths load.
-    Ok((repo.get("pytorch_model.bin")?, repo.get("tokenizer.json")?))
+    )
 }
 
 pub struct ClipModerator {
