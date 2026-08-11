@@ -1,3 +1,10 @@
+// SonDetail's view! (Title/Meta/Link/script siblings for OG, Twitter, JSON-LD,
+// and oEmbed discovery, plus the article body) generates deeply nested
+// tachys types -- release-mode monomorphization hits rustc's default query
+// depth limit (128) here specifically, even though debug builds never do.
+// Found via a real CI failure across multiple pushes, not a hypothetical.
+#![recursion_limit = "512"]
+
 pub mod api;
 pub mod app;
 pub mod components;

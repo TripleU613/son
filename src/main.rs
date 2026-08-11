@@ -1,5 +1,10 @@
 //! Server entry point.
 
+// See the matching attribute + comment in lib.rs: SonDetail's view! hits
+// rustc's default query depth limit in release mode, and this binary crate
+// hits the same wall independently of the lib crate.
+#![recursion_limit = "512"]
+
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
