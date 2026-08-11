@@ -64,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
         //
         // Declared before the wildcard so the static path wins the match.
         .route("/api/upload", post(soncollection::upload_route::upload))
+        .route(
+            "/api/upload/status/{id}",
+            get(soncollection::upload_route::status),
+        )
         .route("/auth/google/login", get(soncollection::oauth_route::login))
         .route(
             "/auth/google/callback",

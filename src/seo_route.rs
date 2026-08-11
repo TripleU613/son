@@ -96,18 +96,6 @@ pub async fn sitemap_xml() -> impl IntoResponse {
         ));
     }
 
-    match crate::db::sitemap_tags().await {
-        Ok(tags) => {
-            for tag in tags {
-                xml.push_str(&format!(
-                    "  <url><loc>{origin}/tag/{}</loc><changefreq>daily</changefreq><priority>0.4</priority></url>\n",
-                    xml_escape(&tag.slug)
-                ));
-            }
-        }
-        Err(e) => tracing::error!("sitemap.xml: could not load tags: {e}"),
-    }
-
     match crate::db::sitemap_sons(MAX_SITEMAP_SONS).await {
         Ok(sons) => {
             if sons.len() as i64 >= MAX_SITEMAP_SONS {

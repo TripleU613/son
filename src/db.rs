@@ -33,7 +33,8 @@ pub fn client() -> &'static D1 {
 // A LEFT JOIN against users, not a separate per-row query: this is the hot
 // path (every gallery page, every detail view), and joining costs nothing D1
 // doesn't already pay for a single indexed lookup.
-const SON_SELECT: &str = "SELECT s.id, s.title, s.orig_url, s.thumb_url, s.width, s.height, \
+const SON_SELECT: &str =
+    "SELECT s.id, s.slug, s.title, s.orig_url, s.thumb_url, s.width, s.height, \
      s.created_at, s.is_public, s.reports, s.likes, \
      u.display_name AS uploader_name, u.avatar_url AS uploader_avatar \
      FROM sons s LEFT JOIN users u ON u.id = s.uploader_id";
@@ -43,6 +44,9 @@ const SON_SELECT: &str = "SELECT s.id, s.title, s.orig_url, s.thumb_url, s.width
 #[derive(Deserialize)]
 struct SonRow {
     id: String,
+    // Nullable in the schema (see migration 0008), so a row written before the
+    // column existed still deserializes; the id stands in when it is absent.
+    slug: Option<String>,
     title: String,
     orig_url: String,
     thumb_url: String,
@@ -59,6 +63,7 @@ struct SonRow {
 impl From<SonRow> for Son {
     fn from(r: SonRow) -> Self {
         Son {
+            slug: r.slug.clone().unwrap_or_else(|| r.id.clone()),
             id: r.id,
             title: r.title,
             orig_url: r.orig_url,
@@ -70,9 +75,8 @@ impl From<SonRow> for Son {
             reports: r.reports,
             likes: r.likes,
             // Both depend on who is asking / a follow-up query; filled in by
-            // the caller (mark_liked, attach_tags).
+            // the caller (mark_liked).
             liked_by_me: false,
-            tags: Vec::new(),
             uploader: r.uploader_name.map(|display_name| Uploader {
                 display_name,
                 avatar_url: r.uploader_avatar,
@@ -190,7 +194,6 @@ pub async fn list_public(
     };
 
     mark_liked(&mut sons, voter).await?;
-    attach_tags_to(&mut sons).await?;
     Ok(SonPage { sons, next_cursor })
 }
 
@@ -227,9 +230,19 @@ async fn mark_liked(sons: &mut [Son], voter: Option<&str>) -> anyhow::Result<()>
     Ok(())
 }
 
-pub async fn get(id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
-    let sql = format!("{SON_SELECT} WHERE s.id = ?1");
-    let rows: Vec<SonRow> = client().query(&sql, vec![json!(id)]).await?;
+/// One son, by slug or by id.
+///
+/// Both, in one query, because a link with a bare id has to keep working: every
+/// son shared before slugs existed used one, and so does anything that grabbed a
+/// URL from the API. Slug is matched first so a son can never be shadowed by
+/// another's id.
+pub async fn get(slug_or_id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
+    let sql = format!(
+        "{SON_SELECT} WHERE s.slug = ?1 OR s.id = ?1 \
+         ORDER BY CASE WHEN s.slug = ?1 THEN 0 ELSE 1 END \
+         LIMIT 1"
+    );
+    let rows: Vec<SonRow> = client().query(&sql, vec![json!(slug_or_id)]).await?;
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);
     };
@@ -241,18 +254,55 @@ pub async fn get(id: &str, voter: Option<&str>) -> anyhow::Result<Option<Son>> {
             #[allow(dead_code)]
             x: i64,
         }
+        // Keyed on the son's real id, not on whatever form the URL used.
         let hit: Vec<Hit> = client()
             .query(
                 "SELECT 1 AS x FROM likes WHERE son_id = ?1 AND voter_id = ?2",
-                vec![json!(id), json!(voter)],
+                vec![json!(son.id), json!(voter)],
             )
             .await?;
         son.liked_by_me = !hit.is_empty();
     }
-    let mut one = [son];
-    attach_tags_to(&mut one).await?;
-    let [son] = one;
     Ok(Some(son))
+}
+
+/// A slug for `title` that nothing else is using.
+///
+/// Appends -2, -3, ... on collision. Racy in principle -- two simultaneous
+/// uploads of the same title could both see a free slug -- but the UNIQUE index
+/// is the real guard, and the insert failing is preferable to two sons quietly
+/// sharing a URL. Uploads are not remotely a hot path.
+pub async fn unique_slug(title: &str, id: &str) -> String {
+    let base = slugify(title);
+    if base.is_empty() {
+        return id.to_string();
+    }
+
+    #[derive(Deserialize)]
+    struct Row {
+        slug: String,
+    }
+    let taken: Vec<Row> = client()
+        .query(
+            "SELECT slug FROM sons WHERE slug = ?1 OR slug LIKE ?1 || '-%'",
+            vec![json!(base)],
+        )
+        .await
+        .unwrap_or_default();
+    let taken: std::collections::HashSet<String> = taken.into_iter().map(|r| r.slug).collect();
+
+    if !taken.contains(&base) {
+        return base;
+    }
+    // Bounded: past a few hundred sons with one title, the id is a better URL
+    // than "sonion-417" anyway.
+    for n in 2..500 {
+        let candidate = format!("{base}-{n}");
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+    }
+    id.to_string()
 }
 
 /// Exact-duplicate lookup by content hash, across every son regardless of
@@ -267,6 +317,7 @@ pub async fn find_by_hash(hash: &str) -> anyhow::Result<Option<Son>> {
 
 pub struct NewSon<'a> {
     pub id: &'a str,
+    pub slug: &'a str,
     pub title: &'a str,
     pub orig_url: &'a str,
     pub thumb_url: &'a str,
@@ -283,10 +334,6 @@ pub struct NewSon<'a> {
     /// the caller after insert already shows attribution correctly, without
     /// an extra round trip to re-fetch what the caller already had in hand.
     pub uploader: Option<Uploader>,
-    /// Attached by the caller after linking `son_tags`, for the same reason
-    /// as `uploader`: the immediate response should already show what was
-    /// just attached, not wait for the next page load.
-    pub tags: Vec<crate::models::Tag>,
 }
 
 pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
@@ -300,12 +347,13 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
     // filtering depends on them.
     client()
         .exec(
-            "INSERT INTO sons (id, title, orig_url, thumb_url, width, height, \
+            "INSERT INTO sons (id, slug, title, orig_url, thumb_url, width, height, \
                                son_score, nsfw_score, created_at, is_public, reports, \
                                uploader_id, content_hash) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,0,?7,1,0,?8,?9)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,0,0,?8,1,0,?9,?10)",
             vec![
                 json!(new.id),
+                json!(new.slug),
                 json!(new.title),
                 json!(new.orig_url),
                 json!(new.thumb_url),
@@ -320,6 +368,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
 
     Ok(Son {
         id: new.id.to_string(),
+        slug: new.slug.to_string(),
         title: new.title.to_string(),
         orig_url: new.orig_url.to_string(),
         thumb_url: new.thumb_url.to_string(),
@@ -331,7 +380,6 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
         likes: 0,
         liked_by_me: false,
         uploader: new.uploader,
-        tags: new.tags,
     })
 }
 
@@ -578,9 +626,25 @@ pub async fn get_user(id: &str) -> anyhow::Result<Option<User>> {
 /// (Google's stable subject id — the only field from a Google profile that is
 /// guaranteed never to change or be reused for a different person).
 ///
-/// `is_admin` is untouched on conflict: it starts at 0 for a new row, and an
-/// existing admin does not get silently reset just because they logged in
-/// again with a since-changed display name or photo.
+/// Admin comes from `ADMIN_EMAILS` (comma-separated), matched against the email
+/// Google just asserted for this login. Deliberately not a hardcoded address:
+/// this repo is public, and a list of admin accounts in source is both a
+/// disclosure and a thing nobody can change without a deploy.
+///
+/// Re-evaluated on every login rather than only on insert, so adding an address
+/// to the secret promotes that account the next time they sign in, and removing
+/// one demotes them. The env var is the single source of truth -- a manual
+/// `UPDATE users SET is_admin = 1` would be silently reverted at their next
+/// login, which is the intended behaviour.
+fn is_admin_email(email: &str) -> bool {
+    let email = email.trim().to_ascii_lowercase();
+    std::env::var("ADMIN_EMAILS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|e| e.trim().to_ascii_lowercase())
+        .any(|allowed| !allowed.is_empty() && allowed == email)
+}
+
 pub async fn upsert_user(
     google_sub: &str,
     email: &str,
@@ -588,13 +652,15 @@ pub async fn upsert_user(
     avatar_url: Option<&str>,
 ) -> anyhow::Result<User> {
     let id = uuid::Uuid::new_v4().to_string();
+    let admin = i64::from(is_admin_email(email));
     let sql = format!(
         "INSERT INTO users (id, google_sub, email, display_name, avatar_url, is_admin, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?7, ?6) \
          ON CONFLICT (google_sub) DO UPDATE SET \
              email = excluded.email, \
              display_name = excluded.display_name, \
-             avatar_url = excluded.avatar_url \
+             avatar_url = excluded.avatar_url, \
+             is_admin = excluded.is_admin \
          RETURNING {USER_COLS}"
     );
     let rows: Vec<UserRow> = client()
@@ -607,6 +673,7 @@ pub async fn upsert_user(
                 json!(display_name),
                 json!(avatar_url),
                 json!(chrono::Utc::now().to_rfc3339()),
+                json!(admin),
             ],
         )
         .await?;
@@ -673,7 +740,10 @@ pub async fn son_of_the_day() -> anyhow::Result<Option<Son>> {
     Ok(fallback.into_iter().next().map(Son::from))
 }
 
-fn slugify(name: &str) -> String {
+/// Lowercase, alphanumerics kept, every other run collapsed to one dash, no
+/// leading or trailing dash. Empty for a title with nothing sluggable in it --
+/// callers decide the fallback, which for a son is its id.
+pub fn slugify(name: &str) -> String {
     let mut slug = String::new();
     let mut last_was_dash = true; // swallow a leading dash
     for c in name.to_lowercase().chars() {
@@ -685,149 +755,7 @@ fn slugify(name: &str) -> String {
             last_was_dash = true;
         }
     }
-    let trimmed = slug.trim_end_matches('-');
-    if trimmed.is_empty() {
-        "tag".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Free-text tag names (as typed on the upload form) → upserted `tags` rows,
-/// linked to `son_id` via `son_tags`. Idempotent: re-uploading with the same
-/// tag name reuses the existing row rather than erroring on the UNIQUE name.
-pub async fn attach_tags(
-    son_id: &str,
-    names: &[String],
-) -> anyhow::Result<Vec<crate::models::Tag>> {
-    use crate::models::Tag;
-
-    let mut tags = Vec::with_capacity(names.len());
-    for raw in names {
-        let name = raw.trim();
-        if name.is_empty() {
-            continue;
-        }
-        let slug = slugify(name);
-        let id = uuid::Uuid::new_v4().to_string();
-
-        // Upsert by name; on conflict, this is a no-op that still lets the
-        // RETURNING clause hand back the existing row's real slug (which may
-        // differ from a fresh slugify of `name` if capitalization varies).
-        #[derive(Deserialize)]
-        struct Row {
-            name: String,
-            slug: String,
-        }
-        let rows: Vec<Row> = client()
-            .query(
-                "INSERT INTO tags (id, name, slug) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT (name) DO UPDATE SET name = excluded.name \
-                 RETURNING name, slug",
-                vec![json!(id), json!(name), json!(slug)],
-            )
-            .await?;
-        let Some(row) = rows.into_iter().next() else {
-            continue;
-        };
-
-        client()
-            .exec(
-                "INSERT INTO son_tags (son_id, tag_id) \
-                 SELECT ?1, id FROM tags WHERE name = ?2 \
-                 ON CONFLICT (son_id, tag_id) DO NOTHING",
-                vec![json!(son_id), json!(name)],
-            )
-            .await?;
-
-        tags.push(Tag {
-            name: row.name,
-            slug: row.slug,
-        });
-    }
-    Ok(tags)
-}
-
-/// Batch-attach tags to a page of sons in one query, the same pattern as
-/// `mark_liked` — not a query per card.
-async fn attach_tags_to(sons: &mut [Son]) -> anyhow::Result<()> {
-    use crate::models::Tag;
-
-    if sons.is_empty() {
-        return Ok(());
-    }
-    let holes = (0..sons.len())
-        .map(|i| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "SELECT st.son_id, t.name, t.slug FROM son_tags st \
-         JOIN tags t ON t.id = st.tag_id \
-         WHERE st.son_id IN ({holes}) \
-         ORDER BY t.name"
-    );
-
-    #[derive(Deserialize)]
-    struct Row {
-        son_id: String,
-        name: String,
-        slug: String,
-    }
-    let rows: Vec<Row> = client()
-        .query(&sql, sons.iter().map(|s| json!(s.id)).collect())
-        .await?;
-
-    let mut by_son: std::collections::HashMap<String, Vec<Tag>> = std::collections::HashMap::new();
-    for r in rows {
-        by_son.entry(r.son_id).or_default().push(Tag {
-            name: r.name,
-            slug: r.slug,
-        });
-    }
-    for s in sons.iter_mut() {
-        if let Some(tags) = by_son.remove(&s.id) {
-            s.tags = tags;
-        }
-    }
-    Ok(())
-}
-
-/// A public gallery page filtered to one tag, newest first. Its own function
-/// rather than a third `Sort` variant: a tag filter composes with sort order
-/// conceptually, but that's more than this MVP needs — newest-within-tag
-/// covers the actual use case (browse everything under a tag).
-pub async fn sons_by_tag(
-    slug: &str,
-    cursor: Option<&str>,
-    voter: Option<&str>,
-) -> anyhow::Result<SonPage> {
-    let sql = format!(
-        "{SON_SELECT} \
-         JOIN son_tags st ON st.son_id = s.id \
-         JOIN tags t ON t.id = st.tag_id \
-         WHERE s.is_public = 1 AND t.slug = ?1 AND (?2 IS NULL OR s.created_at < ?2) \
-         ORDER BY s.created_at DESC, s.id DESC \
-         LIMIT ?3"
-    );
-    let rows: Vec<SonRow> = client()
-        .query(&sql, vec![json!(slug), json!(cursor), json!(PAGE_SIZE + 1)])
-        .await?;
-
-    let has_more = rows.len() as i64 > PAGE_SIZE;
-    let mut sons: Vec<Son> = rows
-        .into_iter()
-        .take(PAGE_SIZE as usize)
-        .map(Son::from)
-        .collect();
-    let next_cursor = if has_more {
-        sons.last().map(|s| s.created_at.clone())
-    } else {
-        None
-    };
-
-    mark_liked(&mut sons, voter).await?;
-    attach_tags_to(&mut sons).await?;
-    Ok(SonPage { sons, next_cursor })
+    slug.trim_end_matches('-').to_string()
 }
 
 /// The shortest text the trigram tokeniser can index. A one- or two-character
@@ -967,13 +895,14 @@ pub async fn search_sons(query: &str, voter: Option<&str>) -> anyhow::Result<Vec
 
     let mut sons: Vec<Son> = rows.into_iter().map(Son::from).collect();
     mark_liked(&mut sons, voter).await?;
-    attach_tags_to(&mut sons).await?;
     Ok(sons)
 }
 
 /// A lightweight row for `sitemap.xml` -- only what the sitemap's image
 /// extension needs, not a full `Son` (no likes/tags/uploader join).
 pub struct SitemapSon {
+    /// The slug, since that is what the sitemap should advertise -- an id URL
+    /// works but is the form nobody should be indexing.
     pub id: String,
     pub title: String,
     pub orig_url: String,
@@ -989,13 +918,14 @@ pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
     #[derive(Deserialize)]
     struct Row {
         id: String,
+        slug: Option<String>,
         title: String,
         orig_url: String,
         created_at: String,
     }
     let rows: Vec<Row> = client()
         .query(
-            "SELECT id, title, orig_url, created_at FROM sons \
+            "SELECT id, slug, title, orig_url, created_at FROM sons \
              WHERE is_public = 1 ORDER BY created_at DESC LIMIT ?1",
             vec![json!(limit)],
         )
@@ -1003,39 +933,10 @@ pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
     Ok(rows
         .into_iter()
         .map(|r| SitemapSon {
-            id: r.id,
+            id: r.slug.clone().unwrap_or_else(|| r.id.clone()),
             title: r.title,
             orig_url: r.orig_url,
             created_at: r.created_at,
-        })
-        .collect())
-}
-
-/// Every tag with at least one public son under it -- an empty or
-/// entirely-hidden tag page has nothing worth a crawler's time.
-pub async fn sitemap_tags() -> anyhow::Result<Vec<crate::models::Tag>> {
-    use crate::models::Tag;
-
-    #[derive(Deserialize)]
-    struct Row {
-        name: String,
-        slug: String,
-    }
-    let rows: Vec<Row> = client()
-        .query(
-            "SELECT DISTINCT t.name, t.slug FROM tags t \
-             JOIN son_tags st ON st.tag_id = t.id \
-             JOIN sons s ON s.id = st.son_id \
-             WHERE s.is_public = 1 \
-             ORDER BY t.name",
-            vec![],
-        )
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| Tag {
-            name: r.name,
-            slug: r.slug,
         })
         .collect())
 }

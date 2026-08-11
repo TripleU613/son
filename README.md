@@ -93,28 +93,46 @@ src/
   upload_route.rs   POST /api/upload (plain Axum: multipart)
   d1.rs             Cloudflare D1 HTTP client (no sqlx driver exists for D1)
   db.rs             queries against d1.rs, keyset pagination
-  storage.rs        decode → bound → thumbnail → Backend (local | r2)
+  storage.rs        decode → square → thumbnail → Backend (local | r2)
   dedupe.rs         SHA-256 of decoded pixels (exact duplicates only)
+  gemini.rs         client for the screening sidecar
+  jobs.rs           in-memory upload progress, polled by the upload page
   models.rs         types shared by server and wasm
   components/       gallery, card, detail, upload
 
+sidecar/             Python: Gemini via browser cookies (screen + square)
 Dockerfile           multi-stage build; pinned base digests, pinned Tailwind binary
 docker-compose.yml   deployed as-is to bulky-server; app + cloudflared, no volumes
 deploy/known_hosts   bulky-server's pinned SSH host key (public info, safe to commit)
 ```
 
-## Moderation: there isn't any, before the fact
+## Moderation: Gemini, out of process
 
-**Nothing inspects what an upload contains.** No classifier, no scores, no
-thresholds. An upload is decoded, checked against format and size limits, checked
-for being an exact duplicate, and published. Content screening is expected to move
-to an external API; until it does, this is the state of things and the code says so
-out loud — the server logs `content moderation: NONE` on every start.
+Screening happens in **Gemini**, reached through the Python sidecar in `sidecar/`
+(`HanaokaYuzu/Gemini-API`, driven with browser cookies rather than an API key).
+Two calls per upload:
 
-The local CLIP ViT-B/32 model that used to do this (via `candle`, scoring both
-"is this a son" and "is this NSFW" in one forward pass) has been removed, along
-with the embedding-based near-duplicate check that rode on the same inference.
-`src/moderation/` is gone.
+1. **Judge** — two plain lines back: `PASS`/`FAIL`, then `SON`/`NOTSON`. No JSON
+   schema; there are two questions with two answers each.
+2. **Regenerate** — a square version of the image, which is what gets published.
+
+They are separate calls because a single prompt asking for both makes the model
+answer in prose and refuse the image ("I cannot generate, edit, or modify
+images"). Judging first also means an unsafe upload never costs a generation.
+
+`GEMINI_URL` unset ⇒ the step is skipped entirely and uploads publish unscreened.
+Gemini unreachable ⇒ **the original is published unscreened** rather than the
+upload being lost, on the grounds that an outage should not stop contributions.
+Either way `storage::to_square` runs, so every stored image is 1024×1024.
+
+The local CLIP ViT-B/32 model that used to do this (via `candle`) has been
+removed, along with the embedding-based near-duplicate check that rode on the
+same inference. `src/moderation/` is gone. Regenerated images carry Gemini's
+SynthID; that is left intact.
+
+An upload takes ~50 seconds, nearly all of it the image generation, so
+`POST /api/upload` returns a job id and the page polls
+`/api/upload/status/:id` — see `jobs.rs`.
 
 ### What still stops a bad upload
 

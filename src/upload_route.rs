@@ -4,12 +4,15 @@
 //! metadata) → insert. Nothing is written until the duplicate check clears, so a
 //! rejected upload leaves no files to clean up.
 //!
-//! **No content analysis happens here.** Uploads are published as they arrive.
-//! There is no classifier deciding whether an image is a son, or whether it is
-//! explicit — the local CLIP model that used to make both calls was removed, and
-//! screening is expected to move to an external API. Until it does, the only
-//! things standing between an upload and the public gallery are the format and
-//! size limits in `storage::decode` and the human report queue in `/admin`.
+//! Screening and squaring happen in Gemini, through the sidecar (see
+//! `sidecar/gemini_service.py` and `crate::gemini`): it decides whether an image
+//! is safe and whether it is actually a son, and returns a square version. No
+//! model runs in this process.
+//!
+//! With `GEMINI_URL` unset the whole step is skipped and uploads publish
+//! unscreened, which is also what happens when Gemini is unreachable -- an
+//! outage must not stop people contributing. `storage::to_square` runs either
+//! way, so every stored image is the same size regardless.
 
 use crate::models::UploadResult;
 use axum::extract::Multipart;
@@ -17,8 +20,16 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 
-// `HeaderMap` before `Multipart`: axum requires body-consuming extractors
-// (Multipart reads the request body) to come last in a handler's arguments.
+/// `POST /api/upload` -- parses the multipart, then answers 202 with a job id and
+/// does the slow part in the background.
+///
+/// It used to hold the connection for the whole pipeline. With Gemini in the
+/// middle that is ~50 seconds of a form looking frozen, and any proxy with a
+/// 30-second read timeout in between would kill an upload that was going to
+/// succeed. The browser polls `/api/upload/status/:id` instead.
+///
+/// `HeaderMap` before `Multipart`: axum requires body-consuming extractors
+/// (Multipart reads the request body) to come last in a handler's arguments.
 pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl IntoResponse {
     let cookie_header = headers
         .get(axum::http::header::COOKIE)
@@ -35,7 +46,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
 
     let mut bytes: Option<Vec<u8>> = None;
     let mut title = String::new();
-    let mut tags_raw = String::new();
 
     loop {
         let field = match mp.next_field().await {
@@ -52,9 +62,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
             Some("title") => {
                 title = field.text().await.unwrap_or_default();
             }
-            Some("tags") => {
-                tags_raw = field.text().await.unwrap_or_default();
-            }
             _ => {}
         }
     }
@@ -62,6 +69,42 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
     let Some(bytes) = bytes else {
         return bad(StatusCode::BAD_REQUEST, "no file in the 'son' field".into());
     };
+
+    // Everything past here is slow, so it moves off the request. The multipart
+    // had to be drained first: it borrows the request body, which does not
+    // outlive this handler.
+    let job = crate::jobs::start();
+    let job_id = job.clone();
+    tokio::spawn(async move { run(job_id, bytes, title, uploader).await });
+
+    (StatusCode::ACCEPTED, Json(UploadResult::Queued { job }))
+}
+
+/// The pipeline. Reports each step into the job registry as it starts it, so the
+/// browser's poll is describing real work rather than a timed animation.
+async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate::models::User>) {
+    use crate::jobs::set;
+    use crate::models::{Progress, Step};
+
+    macro_rules! step {
+        ($s:expr) => {
+            set(&job, Progress::Running { step: $s })
+        };
+    }
+    macro_rules! fail {
+        ($msg:expr) => {{
+            set(&job, Progress::Failed { message: $msg });
+            return;
+        }};
+    }
+    macro_rules! reject {
+        ($reason:expr) => {{
+            set(&job, Progress::Rejected { reason: $reason });
+            return;
+        }};
+    }
+
+    step!(Step::Fingerprinting);
 
     // Decoding is CPU-bound and attacker-influenced; keep it off the async
     // runtime's worker threads so one huge image can't stall request handling.
@@ -78,13 +121,8 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
 
     let (img, content_hash) = match decoded {
         Ok(Ok(pair)) => pair,
-        Ok(Err(e)) => return bad(StatusCode::BAD_REQUEST, e.to_string()),
-        Err(e) => {
-            return bad(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("decode panicked: {e}"),
-            )
-        }
+        Ok(Err(e)) => fail!(e.to_string()),
+        Err(e) => fail!(format!("decode panicked: {e}")),
     };
 
     // Exact duplicate: same decoded pixels as something already here,
@@ -92,15 +130,10 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
     match crate::db::find_by_hash(&content_hash).await {
         Ok(Some(existing)) => {
             tracing::info!(existing = existing.id, "upload rejected: exact duplicate");
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(UploadResult::Rejected {
-                    reason: format!(
-                        "this exact image is already in the collection: /son/{}",
-                        existing.id
-                    ),
-                }),
-            );
+            reject!(format!(
+                "this exact image is already in the collection: /son/{}",
+                existing.slug
+            ));
         }
         Ok(None) => {}
         // A dedupe-check outage shouldn't block an otherwise-good upload;
@@ -108,8 +141,53 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         Err(e) => tracing::error!("hash dedupe check failed: {e}"),
     }
 
+    // Screening and squaring, in Gemini. Runs after the duplicate check so a
+    // re-upload costs nothing, and before storage so a rejected image is never
+    // written anywhere.
+    //
+    // An `Unavailable` result keeps the original: Gemini being down, rate
+    // limited, or out of quota must not turn into "nobody can upload". The
+    // trade-off is explicit -- an outage means unscreened uploads get through,
+    // which is the same state the site is in with screening switched off.
+    let img = if crate::gemini::url().is_some() {
+        let bytes = match encode_png(&img) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("could not re-encode for screening: {e}");
+                fail!("could not process this son".into());
+            }
+        };
+        // One sidecar call covers both Gemini requests, so the two steps are
+        // reported around it rather than between them.
+        step!(Step::Scanning);
+        let outcome = crate::gemini::process(bytes).await;
+        step!(Step::Regenerating);
+        match outcome {
+            crate::gemini::Outcome::Accepted(square) => {
+                tracing::info!("gemini accepted and squared this upload");
+                square
+            }
+            crate::gemini::Outcome::Rejected(reason) => {
+                tracing::info!(reason = %reason, "upload rejected by gemini");
+                reject!(reason);
+            }
+            crate::gemini::Outcome::Unavailable(why) => {
+                tracing::error!(why = %why, "gemini unavailable; publishing the original unscreened");
+                img
+            }
+        }
+    } else {
+        img
+    };
+
+    // Unconditional, so the gallery's tiles are uniform whether Gemini ran or
+    // not. A no-op when Gemini already returned 1024x1024.
+    step!(Step::Cropping);
+    let img = crate::storage::to_square(&img);
+
     let title = clean_title(&title);
 
+    step!(Step::Storing);
     let stored = match crate::storage::store(
         &img,
         &title,
@@ -120,17 +198,16 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         Ok(s) => s,
         Err(e) => {
             tracing::error!("store failed: {e}");
-            return bad(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "could not save this son".into(),
-            );
+            fail!("could not save this son".into());
         }
     };
 
-    let tag_names = parse_tags(&tags_raw);
+    // After the title is cleaned, so the slug matches what will be displayed.
+    let slug = crate::db::unique_slug(&title, &stored.id).await;
 
     let son = crate::db::insert(crate::db::NewSon {
         id: &stored.id,
+        slug: &slug,
         title: &title,
         orig_url: &stored.orig_url,
         thumb_url: &stored.thumb_url,
@@ -142,53 +219,52 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
             display_name: u.display_name.clone(),
             avatar_url: u.avatar_url.clone(),
         }),
-        // Attached after insert (sons_fts's AFTER INSERT trigger needs the
-        // row to exist first); filled in below once we have the real id.
-        tags: Vec::new(),
     })
     .await;
 
-    let mut son = match son {
+    let son = match son {
         Ok(son) => son,
         Err(e) => {
             // The row failed but the files landed. Remove them so the disk does
             // not fill with images nothing references.
             crate::storage::remove(&stored.id).await;
             tracing::error!("insert failed: {e}");
-            return bad(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "could not record this son".into(),
-            );
+            fail!("could not record this son".into());
         }
     };
 
-    if !tag_names.is_empty() {
-        match crate::db::attach_tags(&son.id, &tag_names).await {
-            Ok(tags) => son.tags = tags,
-            // Not fatal: the son itself is already saved correctly, and tags
-            // can be added on a later edit -- worth failing loudly in logs,
-            // not worth discarding an otherwise-good upload over.
-            Err(e) => tracing::error!("attach_tags failed for {}: {e}", son.id),
-        }
-    }
+    set(&job, Progress::Done { son: Box::new(son) });
+}
 
-    (StatusCode::CREATED, Json(UploadResult::Ok { son }))
+/// `GET /api/upload/status/:id`.
+///
+/// An unknown id answers `Failed` rather than 404: from the browser's side an
+/// expired job and a job that never existed are the same situation -- nothing
+/// further is coming -- and giving it one shape to handle keeps the polling loop
+/// from needing a special case.
+pub async fn status(axum::extract::Path(id): axum::extract::Path<String>) -> impl IntoResponse {
+    match crate::jobs::get(&id) {
+        Some(p) => Json(p),
+        None => Json(crate::jobs::Progress::Failed {
+            message: "this upload is no longer being tracked".into(),
+        }),
+    }
+}
+
+/// Re-encode the decoded image as PNG for the trip to the sidecar.
+///
+/// Deliberately not `storage::encode_png`, which also writes the provenance
+/// iTXt chunks and applies the watermark: none of that should exist on a copy
+/// that only travels to Gemini and back, and the version that gets stored is
+/// the one Gemini returns, not this one.
+fn encode_png(img: &image::DynamicImage) -> anyhow::Result<Vec<u8>> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png)?;
+    Ok(out.into_inner())
 }
 
 fn bad(code: StatusCode, message: String) -> (StatusCode, Json<UploadResult>) {
     (code, Json(UploadResult::Error { message }))
-}
-
-/// Comma-separated free text -> a short, sane list of tag names. Capped at 8
-/// tags and 30 characters each so one upload can't turn into an unbounded
-/// write (or an unbounded `attach_tags` loop).
-fn parse_tags(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty())
-        .map(|t| t.chars().take(30).collect::<String>())
-        .take(8)
-        .collect()
 }
 
 /// Titles are rendered as text by Leptos (which escapes), so this is about

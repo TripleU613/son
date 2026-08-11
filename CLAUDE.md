@@ -143,6 +143,20 @@ statement by statement (trigger bodies contain semicolons, so naive splitting on
 `;` sends fragments). Validate a trigger's body as a standalone SELECT before
 installing it — a bad trigger on `sons` breaks every future upload.
 
+## Slugs, not ids, in URLs
+
+`/son/:slug` (migration 0008). `db::get` matches slug **or** id in one query, so
+every link shared before slugs existed still resolves. Build links from
+`son.slug`, never `son.id`. `db::unique_slug` appends -2, -3 on collision and the
+UNIQUE index is the real guard.
+
+## Admin is an env var, not a database flag
+
+`ADMIN_EMAILS` (comma-separated) is re-checked at every Google login and written
+to `users.is_admin`. A manual `UPDATE users SET is_admin = 1` is reverted the next
+time that person signs in — the env var is the source of truth. A hardcoded list
+would be a disclosure in a public repo.
+
 ## Local dev writes to the production database
 
 There is no local database, deliberately. Local testing touches real data. Clean
@@ -160,16 +174,27 @@ Screenshot at 320 / 360 / 393 / 768 / 1024 / 1440 / 2560. The recurring failures
 are horizontal overflow, header/content width mismatch, and a footer floating
 above the fold on short pages.
 
-## There is no content moderation
+## Moderation lives in Gemini, in a Python sidecar
 
-Nothing inspects what an upload contains. The local CLIP model, its scores, and
-the embedding-based near-duplicate check are all gone; screening is expected to
-move to an external API. Uploads publish on arrival.
+`sidecar/gemini_service.py` judges and squares every upload; `src/gemini.rs` is
+the Rust client. Things that will bite you there:
 
-What that means when changing upload code:
+- **Two Gemini calls, never one.** A prompt that asks it to judge *and* generate
+  makes it answer in prose: "I cannot generate, edit, or modify images."
+- **Upload files by path, not `BytesIO`.** `gemini_webapi`'s uploader needs an
+  explicit filename for in-memory data and `generate_content` gives no way to
+  pass one, so a BytesIO silently attaches nothing and the model then describes
+  an image it never saw.
+- **Flash judges, Pro generates.** Both read images; Pro is the one that reliably
+  returns one.
+- `GEMINI_URL` unset ⇒ skipped. Unreachable ⇒ original published unscreened, on
+  purpose: an outage must not stop uploads. Distinguish `Rejected` (a decision)
+  from `Unavailable` (a malfunction) — they must never be collapsed.
+- Uploads take ~50s, so they are jobs (`jobs.rs`, in-memory) that the page polls.
+  A restart loses in-flight jobs; the browser is told, rather than hanging.
 
-- The only pre-publish checks are format/size limits in `storage::decode` and the
-  exact-duplicate pixel hash in `dedupe`. Neither knows anything about content.
+- The only non-Gemini pre-publish checks are format/size limits in
+  `storage::decode` and the exact-duplicate pixel hash in `dedupe`.
 - `sons.son_score` / `sons.nsfw_score` are still `NOT NULL` in the schema and are
   written as literal `0`. They are kept so an external screening API has somewhere
   to write. A `0` means "not assessed" — do not build anything that reads them as

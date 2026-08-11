@@ -29,6 +29,43 @@ pub const THUMB_MAX_EDGE: u32 = 480;
 /// Blocks decompression bombs: a few-KB PNG can claim 50000x50000.
 const MAX_PIXELS: u64 = 40_000_000;
 
+/// Every stored original is exactly this, square. 1024 because that is what
+/// Gemini returns, so an accepted image is stored at its native size with no
+/// resample at all.
+pub const CANVAS: u32 = 1024;
+
+/// Force an image to a `CANVAS`-sized square by cropping to centre and scaling.
+///
+/// Applied to every upload, including ones Gemini never saw (screening off, or
+/// unavailable) -- "every image the same size" has to hold unconditionally, or
+/// the grid goes back to having its rows staggered by whichever card is tallest.
+///
+/// Crops rather than letterboxes: bars would make the stored file contain
+/// padding that every downstream consumer -- cards, OG images, the API -- then
+/// has to work around. A centre crop loses edges, which for a meme is the part
+/// nobody framed anything important in.
+pub fn to_square(img: &DynamicImage) -> DynamicImage {
+    let (w, h) = (img.width().max(1), img.height().max(1));
+
+    let square = if w == h {
+        img.clone()
+    } else {
+        let edge = w.min(h);
+        // Integer division: with an odd difference this leaves the extra pixel
+        // on the right/bottom, which is invisible and beats rounding up and
+        // cropping outside the image.
+        img.crop_imm((w - edge) / 2, (h - edge) / 2, edge, edge)
+    };
+
+    if square.width() == CANVAS {
+        return square;
+    }
+    // Lanczos3: these get scaled both up (a 200px meme) and down (a 4000px
+    // photo), and it is the only filter here that does not visibly soften on the
+    // way up or alias on the way down.
+    square.resize_exact(CANVAS, CANVAS, image::imageops::FilterType::Lanczos3)
+}
+
 /// Where the bytes actually live.
 #[async_trait::async_trait]
 pub trait Backend: Send + Sync + 'static {

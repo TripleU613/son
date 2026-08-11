@@ -19,6 +19,12 @@ pub mod d1;
 pub mod db;
 #[cfg(feature = "ssr")]
 pub mod dedupe;
+/// Gemini screening + squaring, via the Python sidecar (see sidecar/).
+#[cfg(feature = "ssr")]
+pub mod gemini;
+/// In-memory upload progress, polled by the upload page.
+#[cfg(feature = "ssr")]
+pub mod jobs;
 
 #[cfg(feature = "ssr")]
 pub mod oauth_route;

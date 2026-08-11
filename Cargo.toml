@@ -37,11 +37,16 @@ web-sys = { version = "0.3", features = [
   # Share/copy button: navigator.share where it exists, clipboard where it
   # doesn't. Both are behind their own web-sys features.
   "Navigator", "Clipboard", "ShareData", "Location",
+  # Drag-and-drop onto the upload drop zone.
+  "DragEvent", "DataTransfer",
 ], optional = true }
 # Only for awaiting the clipboard promise, so "Copied" is shown after the write
 # succeeds rather than after it was merely requested. Already in the tree via
 # leptos; named here because this crate uses it directly.
 wasm-bindgen-futures = { version = "0.4", optional = true }
+# An awaitable sleep in wasm, for the upload page's poll loop. std::thread::sleep
+# does not exist there and setTimeout callbacks cannot be awaited directly.
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 
 # --- ssr-only (server) ---
 leptos_axum = { version = "0.8.10", optional = true }
@@ -55,7 +60,7 @@ tower-http = { version = "0.6", features = ["fs"], optional = true }
 # one rustls-webpki 0.101.7 (HIGH) advisory removed once from a different
 # dependency — no reason to reopen that door here.
 reqwest = { version = "0.13", default-features = false, features = [
-  "json", "rustls", "form",
+  "json", "rustls", "form", "multipart",
 ], optional = true }
 serde_json = { version = "1", optional = true }
 image = { version = "0.25", optional = true }
@@ -101,6 +106,7 @@ hydrate = [
   "dep:gloo-net",
   "dep:web-sys",
   "dep:wasm-bindgen-futures",
+  "dep:gloo-timers",
 ]
 ssr = [
   "leptos/ssr",

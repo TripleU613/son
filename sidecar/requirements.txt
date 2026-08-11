@@ -1,0 +1,8 @@
+# Pinned exactly, to the versions this was actually tested against: the client
+# reaches a private, undocumented endpoint that changes without notice, so an
+# unpinned upgrade turns into a live outage rather than a build failure. Bump
+# deliberately, then run a real upload before deploying.
+gemini_webapi==2.0.0
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32

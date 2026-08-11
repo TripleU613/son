@@ -113,14 +113,6 @@ pub async fn son_of_the_day() -> Result<Option<Son>, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[server(SonsByTag, "/api")]
-pub async fn sons_by_tag(slug: String, cursor: Option<String>) -> Result<SonPage, ServerFnError> {
-    let voter = current_voter().await;
-    crate::db::sons_by_tag(&slug, cursor.as_deref(), voter.as_deref())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
-}
-
 #[server(SearchSons, "/api")]
 pub async fn search_sons(query: String) -> Result<Vec<Son>, ServerFnError> {
     let voter = current_voter().await;

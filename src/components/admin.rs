@@ -100,7 +100,7 @@ fn AdminRow(
             <img class="h-[88px] w-[88px] flex-none rounded object-cover" src=son.thumb_url.clone() alt=""/>
             <div class="grid min-w-0 flex-1 gap-2">
                 <div class="flex items-center gap-2.5">
-                    <a href=format!("/son/{}", son.id)>{son.title.clone()}</a>
+                    <a href=format!("/son/{}", son.slug)>{son.title.clone()}</a>
                     <span class=if son.is_public {
                         "rounded-full bg-ok px-2 py-0.5 text-[0.72rem] text-[#06301c]"
                     } else {

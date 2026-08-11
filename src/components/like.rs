@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::components::icon::{Ico, LuHeart};
+use crate::components::icon::{Ico, LuDroplet};
 
 use crate::api::like_son;
 
@@ -89,12 +89,12 @@ pub fn LikeButton(
                 if liked.get() { "Un-cry over this son" } else { "Cry over this son" }
             }
         >
-            // A Lucide heart rather than the 😭 glyph: the redesign uses one
-            // line-icon language throughout and explicitly rules out emoji
-            // standing in for icons. The *wording* keeps the joke -- the
-            // accessible label and the metric are still "cry over", not "like".
+            // A teardrop, not a heart: the metric is "cries", and a heart said
+            // "like" while every label around it said cry. Lucide has no crying
+            // face, and an 😭 glyph here would be an emoji standing in for an
+            // icon, which the rest of this UI does not do.
             <span class="inline-flex">
-                <Ico icon=LuHeart size=15/>
+                <Ico icon=LuDroplet size=15/>
             </span>
             <span class="tabular-nums">{move || count.get()}</span>
         </button>

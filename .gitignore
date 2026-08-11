@@ -15,3 +15,7 @@ sons.db*
 
 # Browser-automation scratch output from local verification runs.
 /.playwright-mcp
+
+# Python bytecode from the sidecar.
+__pycache__/
+*.pyc

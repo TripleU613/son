@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Son {
     pub id: String,
+    /// URL-safe form of the title, unique across sons. What `/son/:slug` matches
+    /// on; falls back to the id for a son whose title had nothing sluggable in
+    /// it. Always prefer this over `id` when building a link.
+    pub slug: String,
     pub title: String,
     /// Public URLs, not filesystem paths.
     pub orig_url: String,
@@ -22,13 +26,68 @@ pub struct Son {
     /// `None` for an anonymous upload — still the common case, since logging
     /// in is additive, not required.
     pub uploader: Option<Uploader>,
-    pub tags: Vec<Tag>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tag {
-    pub name: String,
-    pub slug: String,
+/// Where an upload is. Ordered as the pipeline actually runs, which is not the
+/// order anyone would guess: the fingerprint is taken first because the
+/// duplicate check has to happen before anything expensive.
+// Hash so the upload page can key a `<For>` over `Step::ALL` by the step
+// itself, which is already a unique, stable identity -- no index needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Step {
+    /// Bytes arriving from the browser.
+    Receiving,
+    /// Decode, then SHA-256 of the pixel buffer, then the duplicate lookup.
+    Fingerprinting,
+    /// Gemini deciding: safe, and actually a son?
+    Scanning,
+    /// Gemini drawing the square version.
+    Regenerating,
+    /// Centre crop and scale to the fixed canvas.
+    Cropping,
+    /// Invisible provenance watermark, PNG re-encode, thumbnail, upload to R2.
+    Storing,
+}
+
+impl Step {
+    /// Shown verbatim in the UI. Present tense, because it names what is
+    /// happening right now rather than a stage in an abstract pipeline.
+    pub fn label(self) -> &'static str {
+        match self {
+            Step::Receiving => "Uploading",
+            Step::Fingerprinting => "Fingerprinting",
+            Step::Scanning => "Scanning",
+            Step::Regenerating => "Regenerating",
+            Step::Cropping => "Cropping",
+            Step::Storing => "Saving",
+        }
+    }
+
+    /// Every step, in order, so the UI can draw the whole list up front and
+    /// light each one as it completes instead of having rows appear one by one.
+    pub const ALL: [Step; 6] = [
+        Step::Receiving,
+        Step::Fingerprinting,
+        Step::Scanning,
+        Step::Regenerating,
+        Step::Cropping,
+        Step::Storing,
+    ];
+}
+
+/// A job's public state, exactly as the browser polls it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Progress {
+    /// Still going. `step` is the one currently running.
+    Running { step: Step },
+    /// Finished. The son is published.
+    Done { son: Box<Son> },
+    /// Refused, with a line fit to show a visitor.
+    Rejected { reason: String },
+    /// Broke. Also what a client gets for an id that no longer exists.
+    Failed { message: String },
 }
 
 /// A page of sons plus the cursor needed to ask for the next one.
@@ -170,6 +229,12 @@ pub struct FlaggedSon {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UploadResult {
+    /// Accepted for processing. The pipeline takes the best part of a minute
+    /// because Gemini generates an image in the middle of it, so the response
+    /// carries a job id to poll rather than the finished son.
+    Queued {
+        job: String,
+    },
     Ok {
         son: Son,
     },

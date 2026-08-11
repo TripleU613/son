@@ -88,27 +88,8 @@ pub fn SonDetail() -> impl IntoView {
                                 .into_any()
                         }
                         Ok(Some(s)) => {
-                            // A plain one-time conditional, not <Show>: `when`
-                            // there expects a reactive closure for a condition
-                            // that can change after the initial render, and
-                            // tags don't change once the son has loaded --
-                            // using it anyway is what produced a real
-                            // Fn-vs-FnOnce compile error from the nested
-                            // closure capturing `tags` by move.
-                            let tag_chips = (!s.tags.is_empty()).then(|| {
-                                let tags = s.tags.clone();
-                                view! {
-                                    <div class="mb-3.5 flex flex-wrap gap-1.5">
-                                        <For each=move || tags.clone() key=|t| t.slug.clone() let:tag>
-                                            <A href=format!("/tag/{}", tag.slug) attr:class="chip px-2.5 py-0.5 text-[0.7rem]">
-                                                {tag.name.clone()}
-                                            </A>
-                                        </For>
-                                    </div>
-                                }
-                            });
                             let description = describe(&s);
-                            let page_url = absolute(&format!("/son/{}", s.id));
+                            let page_url = absolute(&format!("/son/{}", s.slug));
                             let json_ld = image_object_json_ld(&s);
                             view! {
                                 <Title text=format!("{} — son collection", s.title)/>
@@ -196,7 +177,6 @@ pub fn SonDetail() -> impl IntoView {
                                             </span>
                                         </div>
 
-                                        {tag_chips}
 
                                         // Icon-only actions. The count beside
                                         // the heart is data, not a label; every

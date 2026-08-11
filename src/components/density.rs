@@ -6,14 +6,17 @@
 
 use leptos::prelude::*;
 
-use crate::components::icon::{Ico, LuGrid2x2, LuLayoutGrid, LuList};
+use crate::components::icon::{Ico, LuGalleryThumbnails, LuGrid2x2, LuLayoutGrid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Density {
     Compact,
     #[default]
     Cozy,
-    List,
+    /// Masonry: uneven column runs, each card at its own height. Replaced the
+    /// old single-column list view, which was a row of 84px thumbnails and
+    /// showed less of each son than any of the grids did.
+    Masonry,
 }
 
 impl Density {
@@ -21,7 +24,12 @@ impl Density {
         match self {
             Density::Compact => "grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5 min-[1900px]:grid-cols-8",
             Density::Cozy => "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 min-[1600px]:grid-cols-5 min-[1900px]:grid-cols-6",
-            Density::List => "grid grid-cols-1 gap-2.5 [&_.card]:flex-row [&_.card]:items-center [&_.card-frame]:aspect-square [&_.card-frame]:h-[84px] [&_.card-frame]:w-[84px]",
+            // CSS multi-column, not grid: real masonry wants columns that run
+            // to different lengths, which `columns` gives natively with
+            // `break-inside: avoid`. Cards drop the uniform square crop here and
+            // use each son's own ratio via the `--son-ratio` custom property the
+            // card publishes -- the same mechanism `MoreSons` uses.
+            Density::Masonry => "columns-2 gap-3 sm:columns-3 xl:columns-4 min-[1600px]:columns-5 [&_.card]:mb-3 [&_.card]:break-inside-avoid [&_.card-frame]:aspect-[var(--son-ratio,4/5)]",
         }
     }
 }
@@ -53,12 +61,12 @@ pub fn DensityToggle(
             </button>
             <button
                 class="icon-btn rounded-full"
-                class:is-active=move || density.get() == Density::List
-                on:click=move |_| set_density.set(Density::List)
-                title="List"
-                aria-label="List"
+                class:is-active=move || density.get() == Density::Masonry
+                on:click=move |_| set_density.set(Density::Masonry)
+                title="Masonry"
+                aria-label="Masonry"
             >
-                <Ico icon=LuList size=16/>
+                <Ico icon=LuGalleryThumbnails size=16/>
             </button>
         </div>
     }

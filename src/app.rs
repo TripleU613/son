@@ -16,16 +16,32 @@ use crate::components::legal::{Privacy, Terms};
 use crate::components::search::SearchPage;
 use crate::components::search_box::SearchBox;
 use crate::components::sort_chips::{GalleryView, SortCtx};
-use crate::components::tag_page::TagPage;
 use crate::components::upload::Upload;
 
-/// An inline SVG favicon (the crying-face emoji on the accent yellow) --
-/// no image asset to generate or keep in sync with the brand color, and it
-/// renders crisp at every size browsers ask for.
-const FAVICON: &str = "data:image/svg+xml,\
-<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>\
-<text y='.9em' font-size='90'>%F0%9F%98%AD</text>\
-</svg>";
+/// Cloudflare Web Analytics beacon.
+///
+/// The one piece of third-party script on the site. Cloudflare already records
+/// requests, bandwidth, cache hit ratio, threats and top paths at the edge with
+/// nothing added -- that is server-side and needs no tag. This adds what the edge
+/// cannot see: page views tied to a session, referrers, browser/OS/country
+/// breakdowns, and Core Web Vitals (LCP/INP/CLS), which is what shows whether
+/// the gallery is fast on real phones.
+///
+/// Cookieless and env-gated: absent token, absent script. Kept as a token rather
+/// than committed, since it identifies the account's analytics site.
+fn cf_beacon_token() -> Option<String> {
+    // `shell` is server-rendered but compiles for wasm too, so this needs a body
+    // in both builds. There is no environment to read in the browser, and the
+    // tag is already in the HTML by then.
+    #[cfg(feature = "ssr")]
+    {
+        std::env::var("CF_ANALYTICS_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty())
+    }
+    #[cfg(not(feature = "ssr"))]
+    None
+}
 
 /// The HTML document. Server-side only entry point; `HydrationScripts` injects
 /// the wasm loader so the client picks up where SSR left off.
@@ -36,7 +52,17 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-                <link rel="icon" href=FAVICON/>
+                // Real icon files now that the brand has a mark, rather than the
+                // emoji-in-an-SVG placeholder. 32px for tabs, 180px for an iOS
+                // home screen.
+                <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"/>
+                <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+                // The bigger mark, for link previews on pages that have no image
+                // of their own to show (everything except a son's own page,
+                // which overrides these in SonDetail).
+                <meta property="og:image" content="/logo-large.png"/>
+                <meta property="og:site_name" content="son collection"/>
+                <meta name="theme-color" content="#08090b"/>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options=options.clone()/>
                 // Emitted here rather than as a <Stylesheet> inside App: the
@@ -45,6 +71,18 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 // `hash-files` in Cargo.toml for why the hash matters.
                 <HashedStylesheet options=options.clone() id="leptos"/>
                 <MetaTags/>
+                // Last in <head> and deferred, so analytics never delays first
+                // paint. `data-cf-beacon` is Cloudflare's own attribute contract.
+                {cf_beacon_token()
+                    .map(|token| {
+                        view! {
+                            <script
+                                defer
+                                src="https://static.cloudflareinsights.com/beacon.min.js"
+                                data-cf-beacon=format!("{{\"token\": \"{token}\"}}")
+                            />
+                        }
+                    })}
             </head>
             <body>
                 <App/>
@@ -86,7 +124,6 @@ pub fn App() -> impl IntoView {
                     // No server data; streaming is fine here.
                     <Route path=path!("/upload") view=Upload/>
                     <Route path=path!("/leaderboard") view=Leaderboard ssr=SsrMode::Async/>
-                    <Route path=path!("/tag/:slug") view=TagPage ssr=SsrMode::Async/>
                     <Route path=path!("/search") view=SearchPage ssr=SsrMode::Async/>
                     // Not SsrMode::Async: it carries no SEO-relevant content
                     // and is gated server-side in every fn it calls anyway, so
@@ -124,13 +161,18 @@ fn Header() -> impl IntoView {
             // reach the viewport edges) while the brand and the icons sit on the
             // same left/right edges as the grid.
             <div class="mx-auto flex h-full max-w-content items-center gap-3 px-4 lg:gap-4 lg:px-8">
-            <A href="/" attr:class="flex flex-none items-center gap-2 text-xl font-bold leading-none tracking-tight" attr:aria-label="son collection, home">
-                <span class="text-accent">"son"</span>
-                <span class="flex flex-none items-center gap-px text-[0.55em] leading-none" aria-hidden="true">
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                    <span>"\u{1F62D}"</span>
-                </span>
+            // The real mark, at 2x for retina. width/height are set so the
+            // header does not reflow while it loads, and it is eager rather than
+            // lazy because it is the first thing above the fold.
+            <A href="/" attr:class="flex flex-none items-center" attr:aria-label="son collection, home">
+                <img
+                    src="/logo.png"
+                    alt="son collection"
+                    width="183"
+                    height="96"
+                    decoding="async"
+                    class="h-7 w-auto lg:h-8"
+                />
             </A>
 
             <div class="ml-auto flex min-w-0 items-center gap-2">
@@ -158,10 +200,14 @@ fn Header() -> impl IntoView {
                     </A>
                 </nav>
 
-                // Icon on desktop, expanding in place; the mobile bar shows the
-                // field directly, since there is room for it there.
+                <AccountAction/>
+
+                // Search sits last in the lineup. The expanded field opens to
+                // its left (`order-first` on the form) so growing it pushes
+                // nothing around: the icons keep their positions and the field
+                // fills the gap that is already there.
                 <button
-                    class="icon-btn hidden lg:inline-flex"
+                    class="icon-btn hidden flex-none lg:inline-flex"
                     aria-label="Search"
                     aria-expanded=move || search_open.get().to_string()
                     title="Search"
@@ -169,19 +215,18 @@ fn Header() -> impl IntoView {
                 >
                     <Ico icon=LuSearch size=18/>
                 </button>
-                // Collapsed to nothing on desktop until the icon above is
-                // clicked, always visible on mobile where the bar has room.
-                // `lg:hidden` rather than a width/opacity transition: an
-                // invisible-but-present field is still focusable, so tabbing
-                // through the header would land in a search box nobody can see.
+                // Collapsed to nothing on desktop until the icon is clicked,
+                // always visible on mobile where the bar has room. `lg:hidden`
+                // rather than a width/opacity transition: an invisible-but-
+                // present field is still focusable, so tabbing through the
+                // header would land in a search box nobody can see.
                 <SearchBox extra_class=Signal::derive(move || {
                     if search_open.get() {
-                        "lg:flex lg:w-64".to_string()
+                        "lg:order-first lg:flex lg:w-64".to_string()
                     } else {
                         "lg:hidden".to_string()
                     }
                 })/>
-                <AccountAction/>
                 </div>
             </div>
         </header>
@@ -220,6 +265,9 @@ fn BottomNav() -> impl IntoView {
 fn AccountAction() -> impl IntoView {
     let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
+    // Whether the account menu is open. Signed-out visitors never see it, so
+    // this is only ever toggled by the avatar button below.
+    let (menu, set_menu) = signal(false);
 
     view! {
         <Suspense fallback=|| ()>
@@ -227,28 +275,90 @@ fn AccountAction() -> impl IntoView {
                 user.get()
                     .map(|res| match res {
                         Ok(Some(u)) => {
+                            let initial = u
+                                .display_name
+                                .chars()
+                                .next()
+                                .map(|c| c.to_uppercase().to_string())
+                                .unwrap_or_else(|| "?".into());
                             view! {
-                                <div class="flex min-w-0 items-center gap-2 text-[0.85rem]">
-                                    {u.is_admin
-                                        .then(|| {
-                                            view! {
-                                                <A href="/admin" attr:class="text-[0.8rem] text-accent">"Admin"</A>
-                                            }
-                                        })}
-                                    {u
-                                        .avatar_url
-                                        .clone()
-                                        .map(|src| view! { <img class="h-6 w-6 flex-none rounded-full object-cover" src=src alt=""/> })}
-                                    <form method="post" action="/auth/logout" class="inline-flex">
-                                        <button
-                                            type="submit"
-                                            class="icon-btn"
-                                            aria-label="Sign out"
-                                            title="Sign out"
+                                // `relative` so the panel can hang off the
+                                // avatar rather than off the header, which would
+                                // put it at the far edge of the viewport.
+                                <div class="relative flex flex-none items-center">
+                                    <button
+                                        type="button"
+                                        class="icon-btn overflow-hidden"
+                                        aria-label="Account"
+                                        title="Account"
+                                        aria-haspopup="menu"
+                                        aria-expanded=move || menu.get().to_string()
+                                        on:click=move |_| set_menu.update(|m| *m = !*m)
+                                    >
+                                        {u
+                                            .avatar_url
+                                            .clone()
+                                            .map(|src| {
+                                                view! {
+                                                    <img class="h-6 w-6 rounded-full object-cover" src=src alt=""/>
+                                                }
+                                                    .into_any()
+                                            })
+                                            .unwrap_or_else(|| {
+                                                // No Google picture: their
+                                                // initial, so the control still
+                                                // reads as "you" rather than as a
+                                                // generic person glyph.
+                                                view! {
+                                                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-surface-raised text-[0.7rem] font-semibold text-ink-2">
+                                                        {initial.clone()}
+                                                    </span>
+                                                }
+                                                    .into_any()
+                                            })}
+                                    </button>
+
+                                    <Show when=move || menu.get()>
+                                        // A click anywhere else closes it. A
+                                        // full-viewport transparent layer behind
+                                        // the panel does that without a document
+                                        // listener to add, remove, and leak.
+                                        <div
+                                            class="fixed inset-0 z-40"
+                                            on:click=move |_| set_menu.set(false)
+                                        />
+                                        <div
+                                            class="absolute right-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-lg border border-line bg-surface-raised py-1 shadow-lg"
+                                            role="menu"
                                         >
-                                            <Ico icon=LuLogOut size=16/>
-                                        </button>
-                                    </form>
+                                            <p class="truncate px-3 py-1.5 text-[0.8rem] text-ink-3">
+                                                {u.display_name.clone()}
+                                            </p>
+                                            <div class="my-1 border-t border-line"/>
+                                            {u.is_admin
+                                                .then(|| {
+                                                    view! {
+                                                        <A
+                                                            href="/admin"
+                                                            attr:class="block px-3 py-2 text-[0.85rem] text-accent hover:bg-surface-hover"
+                                                            attr:role="menuitem"
+                                                        >
+                                                            "Admin"
+                                                        </A>
+                                                    }
+                                                })}
+                                            <form method="post" action="/auth/logout">
+                                                <button
+                                                    type="submit"
+                                                    role="menuitem"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-[0.85rem] text-ink-2 transition-colors hover:bg-surface-hover hover:text-ink"
+                                                >
+                                                    <Ico icon=LuLogOut size=15/>
+                                                    "Sign out"
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </Show>
                                 </div>
                             }
                                 .into_any()
