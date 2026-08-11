@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
+use crate::components::like::LikeButton;
 use crate::models::Son;
 
 #[component]
@@ -23,7 +24,12 @@ pub fn SonCard(son: Son) -> impl IntoView {
             </div>
             <div class="card-meta">
                 <span class="card-title">{son.title.clone()}</span>
-                <span class="card-score">{son.sonness_label()}</span>
+                <LikeButton
+                    id=son.id.clone()
+                    initial_count=son.likes
+                    initial_liked=son.liked_by_me
+                    small=true
+                />
             </div>
         </A>
     }

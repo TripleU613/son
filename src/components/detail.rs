@@ -4,6 +4,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 
 use crate::api::{get_son, report_son};
+use crate::components::like::LikeButton;
 
 /// Link unfurlers (Discord, Twitter, Slack) reject relative `og:image` URLs, so
 /// these must be absolute. Set `SITE_ORIGIN` (e.g. `https://soncollection.com`);
@@ -77,6 +78,13 @@ pub fn SonDetail() -> impl IntoView {
                                     />
                                     <div class="detail-meta">
                                         <h1>{s.title.clone()}</h1>
+                                        <div class="detail-like">
+                                            <LikeButton
+                                                id=s.id.clone()
+                                                initial_count=s.likes
+                                                initial_liked=s.liked_by_me
+                                            />
+                                        </div>
                                         <dl>
                                             <dt>"sonness"</dt>
                                             <dd>{s.sonness_label()}</dd>

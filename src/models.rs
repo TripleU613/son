@@ -19,6 +19,10 @@ pub struct Son {
     pub created_at: String,
     pub is_public: bool,
     pub reports: i64,
+    pub likes: i64,
+    /// Whether the current visitor has already liked this one. Populated per
+    /// request from their anonymous cookie ID; not a property of the son.
+    pub liked_by_me: bool,
 }
 
 impl Son {
@@ -37,6 +41,30 @@ pub struct SonPage {
 }
 
 pub const PAGE_SIZE: i64 = 24;
+
+/// Gallery ordering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Sort {
+    #[default]
+    Newest,
+    MostLiked,
+}
+
+impl Sort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Sort::Newest => "newest",
+            Sort::MostLiked => "liked",
+        }
+    }
+
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "liked" => Sort::MostLiked,
+            _ => Sort::Newest,
+        }
+    }
+}
 
 /// Reply from `POST /api/upload`.
 ///

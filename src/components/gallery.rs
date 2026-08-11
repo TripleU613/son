@@ -3,19 +3,24 @@ use leptos_meta::Title;
 
 use crate::api::list_sons;
 use crate::components::card::SonCard;
-use crate::models::Son;
+use crate::models::{Son, Sort};
 
 /// The gallery.
 ///
-/// The first page comes from a `Resource` so it renders during SSR — a meme site
-/// lives on shared links, and a client-only grid would hand crawlers an empty
-/// page. Later pages accumulate in a plain signal and append client-side.
+/// The first page comes from a blocking `Resource` so it renders during SSR — a
+/// meme site lives on shared links, and a client-only grid would hand crawlers
+/// an empty page. Later pages accumulate in a plain signal and append
+/// client-side.
 #[component]
 pub fn Gallery() -> impl IntoView {
-    // Blocking so the first page of sons is in the delivered HTML rather than in
-    // a <template> that only JS can swap in. A gallery that renders empty to
-    // crawlers defeats the reason this is server-rendered at all.
-    let first = Resource::new_blocking(|| (), |_| list_sons(None));
+    let (sort, set_sort) = signal(Sort::Newest);
+
+    // Keyed on `sort`, so flipping the order refetches page one from the server
+    // rather than re-sorting a partial list in the browser.
+    let first = Resource::new_blocking(
+        move || sort.get(),
+        |s| async move { list_sons(None, Some(s.as_str().to_string())).await },
+    );
 
     // Pages 2..n, appended below whatever SSR delivered.
     let (extra, set_extra) = signal(Vec::<Son>::new());
@@ -24,8 +29,9 @@ pub fn Gallery() -> impl IntoView {
 
     let load_more = Action::new(move |_: &()| {
         let from = cursor.get_untracked();
+        let s = sort.get_untracked();
         async move {
-            match list_sons(from).await {
+            match list_sons(from, Some(s.as_str().to_string())).await {
                 Ok(page) => {
                     let end = page.next_cursor.is_none();
                     set_extra.update(|v| v.extend(page.sons));
@@ -39,6 +45,16 @@ pub fn Gallery() -> impl IntoView {
 
     let loading = load_more.pending();
 
+    // Switching sort invalidates everything accumulated under the old order.
+    let choose = move |s: Sort| {
+        if sort.get_untracked() != s {
+            set_extra.set(Vec::new());
+            set_cursor.set(None);
+            set_exhausted.set(false);
+            set_sort.set(s);
+        }
+    };
+
     view! {
         <Title text="son collection — every son, collected"/>
 
@@ -46,6 +62,21 @@ pub fn Gallery() -> impl IntoView {
             <h1>"the son collection"</h1>
             <p>"Sonion. Capri-Son. Dy-Son. Sonflower. If it has a son in it, it belongs here."</p>
         </section>
+
+        <div class="sortbar">
+            <button
+                class:active=move || sort.get() == Sort::Newest
+                on:click=move |_| choose(Sort::Newest)
+            >
+                "newest"
+            </button>
+            <button
+                class:active=move || sort.get() == Sort::MostLiked
+                on:click=move |_| choose(Sort::MostLiked)
+            >
+                "most cried over"
+            </button>
+        </div>
 
         <Suspense fallback=|| view! { <div class="grid-skeleton">"gathering sons…"</div> }>
             {move || {
@@ -86,11 +117,7 @@ pub fn Gallery() -> impl IntoView {
                                     >
                                         <SonCard son=son/>
                                     </For>
-                                    <For
-                                        each=move || extra.get()
-                                        key=|s| s.id.clone()
-                                        let:son
-                                    >
+                                    <For each=move || extra.get() key=|s| s.id.clone() let:son>
                                         <SonCard son=son/>
                                     </For>
                                 </div>
