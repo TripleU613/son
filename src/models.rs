@@ -58,6 +58,10 @@ pub enum Sort {
     #[default]
     Newest,
     MostLiked,
+    /// A-Z by title.
+    Az,
+    /// Highest "sun level" (son_score) first.
+    SonScore,
 }
 
 impl Sort {
@@ -65,12 +69,16 @@ impl Sort {
         match self {
             Sort::Newest => "newest",
             Sort::MostLiked => "liked",
+            Sort::Az => "az",
+            Sort::SonScore => "sonscore",
         }
     }
 
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "liked" => Sort::MostLiked,
+            "az" => Sort::Az,
+            "sonscore" => Sort::SonScore,
             _ => Sort::Newest,
         }
     }

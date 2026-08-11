@@ -1,8 +1,9 @@
 use leptos::prelude::*;
-use leptos_meta::Title;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 
 use crate::models::UploadResult;
+use crate::seo::absolute;
 
 /// The free upload page.
 ///
@@ -97,6 +98,11 @@ pub fn Upload() -> impl IntoView {
 
     view! {
         <Title text="contribute a son — son collection"/>
+        <Meta
+            name="description"
+            content="Contribute a son to the collection. Free, no account required — every upload is auto-moderated and published immediately."
+        />
+        <Link rel="canonical" href=absolute("/upload")/>
 
         <section class="upload">
             <h1>"contribute a son"</h1>

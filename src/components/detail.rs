@@ -6,21 +6,55 @@ use leptos_router::hooks::use_params_map;
 use crate::api::get_son;
 use crate::components::like::LikeButton;
 use crate::components::report::ReportForm;
+use crate::models::Son;
+use crate::seo::{absolute, json_escape};
 
-/// Link unfurlers (Discord, Twitter, Slack) reject relative `og:image` URLs, so
-/// these must be absolute. Set `SITE_ORIGIN` (e.g. `https://soncollection.com`);
-/// without it the tag stays relative and previews will have no image.
-fn absolute(url: &str) -> String {
-    #[cfg(feature = "ssr")]
-    {
-        if let Ok(origin) = std::env::var("SITE_ORIGIN") {
-            let origin = origin.trim_end_matches('/');
-            if !origin.is_empty() {
-                return format!("{origin}{url}");
-            }
-        }
-    }
-    url.to_string()
+/// A one-line, human-readable summary of a son -- reused as the page's
+/// `<meta name="description">`, `og:description`, and `twitter:description`
+/// so the three don't drift out of sync with each other.
+fn describe(s: &Son) -> String {
+    let by = match &s.uploader {
+        Some(u) => format!(" Contributed by {}.", u.display_name),
+        None => String::new(),
+    };
+    format!(
+        "{} — {} in the son collection.{}",
+        s.title,
+        s.sonness_label(),
+        by
+    )
+}
+
+/// `schema.org/ImageObject` JSON-LD. Structured data is one of the few
+/// levers Google documents explicitly for ranking in Google Images, so this
+/// exists specifically to help this page dominate there, not just Discord/
+/// Twitter previews (which only need the OG tags above).
+///
+/// Hand-built rather than via `serde_json` (unavailable in the wasm/hydrate
+/// build this component also compiles under) -- every string field goes
+/// through `json_escape`, which also neutralizes `</script>` so a title or
+/// uploader name can never break out of the tag it's embedded in.
+fn image_object_json_ld(s: &Son) -> String {
+    let creator = s
+        .uploader
+        .as_ref()
+        .map(|u| {
+            format!(
+                r#","creator":{{"@type":"Person","name":"{}"}}"#,
+                json_escape(&u.display_name)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"{{"@context":"https://schema.org","@type":"ImageObject","contentUrl":"{content_url}","thumbnailUrl":"{thumb_url}","name":"{name}","description":"{description}","uploadDate":"{uploaded}","width":{width},"height":{height}{creator}}}"#,
+        content_url = json_escape(&s.orig_url),
+        thumb_url = json_escape(&s.thumb_url),
+        name = json_escape(&s.title),
+        description = json_escape(&describe(s)),
+        uploaded = json_escape(&s.created_at),
+        width = s.width,
+        height = s.height,
+    )
 }
 
 /// A single son's page.
@@ -75,12 +109,32 @@ pub fn SonDetail() -> impl IntoView {
                                     </div>
                                 }
                             });
+                            let description = describe(&s);
+                            let page_url = absolute(&format!("/son/{}", s.id));
+                            let json_ld = image_object_json_ld(&s);
                             view! {
                                 <Title text=format!("{} — son collection", s.title)/>
+                                <Meta name="description" content=description.clone()/>
+                                <Link rel="canonical" href=page_url.clone()/>
+
                                 <Meta property="og:title" content=s.title.clone()/>
+                                <Meta property="og:description" content=description.clone()/>
                                 <Meta property="og:image" content=absolute(&s.orig_url)/>
+                                <Meta property="og:image:width" content=s.width.to_string()/>
+                                <Meta property="og:image:height" content=s.height.to_string()/>
                                 <Meta property="og:type" content="image"/>
+                                <Meta property="og:url" content=page_url.clone()/>
+
                                 <Meta name="twitter:card" content="summary_large_image"/>
+                                <Meta name="twitter:title" content=s.title.clone()/>
+                                <Meta name="twitter:description" content=description/>
+                                <Meta name="twitter:image" content=absolute(&s.orig_url)/>
+
+                                // schema.org/ImageObject structured data -- see
+                                // `image_object_json_ld`'s doc comment for why
+                                // this exists.
+                                <script type="application/ld+json" inner_html=json_ld/>
+
                                 // oEmbed discovery: lets embedders that check
                                 // <link rel="alternate"> (WordPress, many wikis)
                                 // find this without knowing the endpoint shape
@@ -90,11 +144,7 @@ pub fn SonDetail() -> impl IntoView {
                                     rel="alternate"
                                     type_="application/json+oembed"
                                     title=s.title.clone()
-                                    href=format!(
-                                        "{}?url={}",
-                                        absolute("/oembed"),
-                                        absolute(&format!("/son/{}", s.id)),
-                                    )
+                                    href=format!("{}?url={}", absolute("/oembed"), page_url)
                                 />
 
                                 <article class="detail">

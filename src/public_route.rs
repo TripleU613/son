@@ -181,7 +181,10 @@ fn extract_son_id(url: &str) -> Option<String> {
 
 /// Cached once, not re-leaked per call: `SITE_ORIGIN` is fixed for the
 /// process's lifetime, so this only ever allocates a single `String`.
-fn site_origin() -> &'static str {
+/// `pub(crate)`: `seo_route` needs the same origin for `robots.txt`/
+/// `sitemap.xml`/`llms.txt`, and there is exactly one process-wide value to
+/// agree on -- not something to look up twice.
+pub(crate) fn site_origin() -> &'static str {
     static ORIGIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ORIGIN.get_or_init(|| {
         std::env::var("SITE_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:3100".to_string())

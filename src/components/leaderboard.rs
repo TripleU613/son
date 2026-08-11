@@ -1,7 +1,8 @@
 use leptos::prelude::*;
-use leptos_meta::Title;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::api::leaderboard;
+use crate::seo::absolute;
 
 #[component]
 pub fn Leaderboard() -> impl IntoView {
@@ -9,6 +10,11 @@ pub fn Leaderboard() -> impl IntoView {
 
     view! {
         <Title text="leaderboard — son collection"/>
+        <Meta
+            name="description"
+            content="Top contributors to the son collection, ranked by public sons uploaded."
+        />
+        <Link rel="canonical" href=absolute("/leaderboard")/>
 
         <section class="hero">
             <h1>"contributors"</h1>

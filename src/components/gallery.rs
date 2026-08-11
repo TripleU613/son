@@ -1,9 +1,14 @@
 use leptos::prelude::*;
-use leptos_meta::Title;
+use leptos_meta::{Link, Meta, Title};
 
 use crate::api::{list_sons, son_of_the_day};
 use crate::components::card::SonCard;
 use crate::models::{Son, Sort};
+use crate::seo::absolute;
+
+const DESCRIPTION: &str = "Every son, collected. Sonion. Capri-Son. Dy-Son. \
+Sonflower. If it has a son in it, it belongs here — a free, community-run \
+gallery of the son meme, open to anonymous uploads.";
 
 /// The gallery.
 ///
@@ -57,6 +62,8 @@ pub fn Gallery() -> impl IntoView {
 
     view! {
         <Title text="son collection — every son, collected"/>
+        <Meta name="description" content=DESCRIPTION/>
+        <Link rel="canonical" href=absolute("/")/>
 
         <section class="hero">
             <h1>"the son collection"</h1>
@@ -77,6 +84,15 @@ pub fn Gallery() -> impl IntoView {
                 on:click=move |_| choose(Sort::MostLiked)
             >
                 "most cried over"
+            </button>
+            <button class:active=move || sort.get() == Sort::Az on:click=move |_| choose(Sort::Az)>
+                "a–z"
+            </button>
+            <button
+                class:active=move || sort.get() == Sort::SonScore
+                on:click=move |_| choose(Sort::SonScore)
+            >
+                "sun level"
             </button>
         </div>
 

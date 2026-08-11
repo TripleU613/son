@@ -78,6 +78,9 @@ async fn main() -> anyhow::Result<()> {
             "/son/{id}/download",
             get(soncollection::public_route::download),
         )
+        .route("/robots.txt", get(soncollection::seo_route::robots_txt))
+        .route("/sitemap.xml", get(soncollection::seo_route::sitemap_xml))
+        .route("/llms.txt", get(soncollection::seo_route::llms_txt))
         .route(
             "/api/{*fn_name}",
             axum::routing::any(leptos_axum::handle_server_fns),

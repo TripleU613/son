@@ -86,24 +86,40 @@ impl From<SonRow> for Son {
 }
 
 /// Cursors are opaque to the client but encode the full sort key, because
-/// keyset pagination needs a total order. `likes` alone is not one — many sons
-/// share a count — so the most-liked cursor carries `created_at` too.
+/// keyset pagination needs a total order. `likes`/`son_score` alone are not
+/// one — many sons share a value — so those cursors carry a tie-breaker too.
+/// Titles can't contain control characters (`upload_route::clean_title`
+/// strips them), so NUL is a safe separator there even though `|` could
+/// theoretically appear in free-text titles.
 fn encode_cursor(s: &Son, sort: Sort) -> String {
     match sort {
         Sort::Newest => s.created_at.clone(),
         Sort::MostLiked => format!("{}|{}", s.likes, s.created_at),
+        Sort::Az => format!("{}\u{0}{}", s.title, s.id),
+        Sort::SonScore => format!("{}|{}", s.son_score, s.id),
     }
 }
 
-fn decode_cursor(cursor: &str, sort: Sort) -> (i64, String) {
-    match sort {
-        Sort::Newest => (0, cursor.to_string()),
-        Sort::MostLiked => match cursor.split_once('|') {
-            Some((likes, created)) => (likes.parse().unwrap_or(i64::MAX), created.to_string()),
-            // Malformed cursor: start from the top rather than erroring at the
-            // user, since a cursor only ever comes from us.
-            None => (i64::MAX, String::new()),
-        },
+fn decode_liked_cursor(cursor: &str) -> (i64, String) {
+    match cursor.split_once('|') {
+        Some((likes, created)) => (likes.parse().unwrap_or(i64::MAX), created.to_string()),
+        // Malformed cursor: start from the top rather than erroring at the
+        // user, since a cursor only ever comes from us.
+        None => (i64::MAX, String::new()),
+    }
+}
+
+fn decode_az_cursor(cursor: &str) -> (String, String) {
+    match cursor.split_once('\u{0}') {
+        Some((title, id)) => (title.to_string(), id.to_string()),
+        None => (String::new(), String::new()),
+    }
+}
+
+fn decode_sonscore_cursor(cursor: &str) -> (f64, String) {
+    match cursor.split_once('|') {
+        Some((score, id)) => (score.parse().unwrap_or(f64::MAX), id.to_string()),
+        None => (f64::MAX, String::new()),
     }
 }
 
@@ -127,7 +143,7 @@ pub async fn list_public(
         }
         Sort::MostLiked => {
             let (likes, created) = cursor
-                .map(|c| decode_cursor(c, sort))
+                .map(decode_liked_cursor)
                 .unwrap_or((i64::MAX, String::new()));
             let sql = format!(
                 "{SON_SELECT} \
@@ -143,6 +159,51 @@ pub async fn list_public(
                         json!(i64::from(cursor.is_some())),
                         json!(likes),
                         json!(created),
+                        json!(PAGE_SIZE + 1),
+                    ],
+                )
+                .await?
+        }
+        Sort::Az => {
+            let (title, id) = cursor.map(decode_az_cursor).unwrap_or_default();
+            let sql = format!(
+                "{SON_SELECT} \
+                 WHERE s.is_public = 1 \
+                   AND (?1 = 0 OR s.title COLLATE NOCASE > ?2 \
+                        OR (s.title COLLATE NOCASE = ?2 AND s.id > ?3)) \
+                 ORDER BY s.title COLLATE NOCASE ASC, s.id ASC \
+                 LIMIT ?4"
+            );
+            client()
+                .query(
+                    &sql,
+                    vec![
+                        json!(i64::from(cursor.is_some())),
+                        json!(title),
+                        json!(id),
+                        json!(PAGE_SIZE + 1),
+                    ],
+                )
+                .await?
+        }
+        Sort::SonScore => {
+            let (score, id) = cursor
+                .map(decode_sonscore_cursor)
+                .unwrap_or((f64::MAX, String::new()));
+            let sql = format!(
+                "{SON_SELECT} \
+                 WHERE s.is_public = 1 \
+                   AND (?1 = 0 OR s.son_score < ?2 OR (s.son_score = ?2 AND s.id < ?3)) \
+                 ORDER BY s.son_score DESC, s.id DESC \
+                 LIMIT ?4"
+            );
+            client()
+                .query(
+                    &sql,
+                    vec![
+                        json!(i64::from(cursor.is_some())),
+                        json!(score),
+                        json!(id),
                         json!(PAGE_SIZE + 1),
                     ],
                 )
@@ -830,4 +891,73 @@ pub async fn search_sons(query: &str, voter: Option<&str>) -> anyhow::Result<Vec
     mark_liked(&mut sons, voter).await?;
     attach_tags_to(&mut sons).await?;
     Ok(sons)
+}
+
+/// A lightweight row for `sitemap.xml` -- only what the sitemap's image
+/// extension needs, not a full `Son` (no likes/tags/uploader join).
+pub struct SitemapSon {
+    pub id: String,
+    pub title: String,
+    pub orig_url: String,
+    pub created_at: String,
+}
+
+/// Every public son, newest first, for the sitemap's `<image:image>`
+/// extension. Capped, not paged: the sitemap protocol has no cursor concept
+/// within one file -- a sitemap *index* (multiple files) is the real answer
+/// once a site outgrows one, not something worth building ahead of actually
+/// needing it.
+pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
+    #[derive(Deserialize)]
+    struct Row {
+        id: String,
+        title: String,
+        orig_url: String,
+        created_at: String,
+    }
+    let rows: Vec<Row> = client()
+        .query(
+            "SELECT id, title, orig_url, created_at FROM sons \
+             WHERE is_public = 1 ORDER BY created_at DESC LIMIT ?1",
+            vec![json!(limit)],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SitemapSon {
+            id: r.id,
+            title: r.title,
+            orig_url: r.orig_url,
+            created_at: r.created_at,
+        })
+        .collect())
+}
+
+/// Every tag with at least one public son under it -- an empty or
+/// entirely-hidden tag page has nothing worth a crawler's time.
+pub async fn sitemap_tags() -> anyhow::Result<Vec<crate::models::Tag>> {
+    use crate::models::Tag;
+
+    #[derive(Deserialize)]
+    struct Row {
+        name: String,
+        slug: String,
+    }
+    let rows: Vec<Row> = client()
+        .query(
+            "SELECT DISTINCT t.name, t.slug FROM tags t \
+             JOIN son_tags st ON st.tag_id = t.id \
+             JOIN sons s ON s.id = st.son_id \
+             WHERE s.is_public = 1 \
+             ORDER BY t.name",
+            vec![],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Tag {
+            name: r.name,
+            slug: r.slug,
+        })
+        .collect())
 }

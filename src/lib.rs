@@ -2,6 +2,7 @@ pub mod api;
 pub mod app;
 pub mod components;
 pub mod models;
+pub mod seo;
 
 #[cfg(feature = "ssr")]
 pub mod auth;
@@ -15,6 +16,8 @@ pub mod moderation;
 pub mod oauth_route;
 #[cfg(feature = "ssr")]
 pub mod public_route;
+#[cfg(feature = "ssr")]
+pub mod seo_route;
 #[cfg(feature = "ssr")]
 pub mod storage;
 #[cfg(feature = "ssr")]

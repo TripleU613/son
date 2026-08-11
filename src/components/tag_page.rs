@@ -1,10 +1,11 @@
 use leptos::prelude::*;
-use leptos_meta::Title;
+use leptos_meta::{Link, Meta, Title};
 use leptos_router::hooks::use_params_map;
 
 use crate::api::sons_by_tag;
 use crate::components::card::SonCard;
 use crate::models::Son;
+use crate::seo::absolute;
 
 /// `/tag/:slug` — the gallery filtered to one tag. Its own route rather than
 /// a gallery sort mode, since a tag filter and a sort order are genuinely
@@ -39,6 +40,14 @@ pub fn TagPage() -> impl IntoView {
 
     view! {
         <Title text=move || format!("#{} — son collection", slug())/>
+        <Meta
+            name="description"
+            content=move || format!("Every son tagged #{} in the son collection.", slug())
+        />
+        // Not reactive (`Link::href` doesn't accept a closure the way
+        // `Meta::content` does) -- harmless here since crawlers always fetch
+        // a fresh SSR response per URL rather than navigating client-side.
+        <Link rel="canonical" href=absolute(&format!("/tag/{}", slug()))/>
 
         <section class="hero">
             <h1>"#" {slug}</h1>
