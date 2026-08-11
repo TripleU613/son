@@ -36,6 +36,43 @@ without it Discord and Twitter previews render with no image.
 database at all, on purpose — see Deploy for why. This means local testing can
 affect real data; `report`/`set_public` exist specifically to undo that.
 
+### Styling
+
+Tailwind, configured in `tailwind.config.js` (palette, radii, chrome heights,
+content widths) with `style/tailwind.css` holding base element defaults and six
+repeated primitives: `.btn`, `.icon-btn`, `.btn-quiet`, `.chip`, `.field`,
+`.card`. None of them set layout — no flex, grid, width or margin. That is
+deliberate: layout stays in utilities on the element, where there is no source
+order for one rule to lose to another. The cascading stylesheet this replaced
+produced nine separate bugs where two equal-specificity rules were resolved by
+which happened to come last in the file.
+
+Classes live inside `view!` macros, so the scanner reads `./src/**/*.rs`. A
+class assembled from fragments at runtime is invisible to it — build the full
+name as a literal (see `like.rs`, which swaps whole class strings).
+
+### `LEPTOS_HASH_FILES` differs between dev and production, on purpose
+
+Production serves content-hashed asset filenames, because Cloudflare's edge
+caches `/pkg/*` per-POP for four hours and fixed filenames meant a coin-flip
+between old and new CSS after a deploy. The Dockerfile sets
+`LEPTOS_HASH_FILES=true` at **runtime**, which is required in addition to
+`hash-files = true` in `Cargo.toml`: the build flag decides what filenames are
+written to disk, the env var decides what filenames the HTML asks for. Setting
+only one of the two ships a site whose HTML requests assets the origin doesn't
+have.
+
+`.env` sets it to `false` for local dev, because `cargo leptos watch`
+regenerates `pkg/soncollection.css` on every edit but never refreshes the hashed
+copy — so with hashing on, dev silently serves stale CSS and edits appear to do
+nothing.
+
+Note that `cargo-leptos` reads `.env` at **build** time too, so a local
+`cargo leptos build --release` produces unhashed filenames. That is fine (CI
+builds in a container with no `.env`), but it means the local release output is
+not what gets deployed. To check the real artifact, build with `.env` moved
+aside and run the binary with `LEPTOS_HASH_FILES=true`.
+
 ### Two SSR pitfalls, already fixed — don't reintroduce them
 
 1. **`SsrMode::Async` on `/` and `/son/:id`.** With the default out-of-order
