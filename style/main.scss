@@ -54,56 +54,190 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---------- nav ---------- */
+// Sticky so the search and section links stay reachable while scrolling a long
+// gallery, with a blurred translucent ground so cards passing underneath read
+// as *behind* it rather than colliding with it.
 .nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: 1px solid var(--line);
+}
+
+.nav-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
+  gap: 12px;
   max-width: 1180px;
   margin: 0 auto;
-  padding: 22px 20px;
+  padding: 12px 16px;
 }
 
 .brand {
   display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  // 700, not 800: the self-hosted display face only covers the 500-700
-  // weight range it was fetched at, and a weight outside that range falls
-  // back to the next font in the stack instead of clamping to the nearest
-  // available weight.
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  // 700, not 800: the self-hosted display face only covers the 500-700 weight
+  // range it was fetched at, and a weight outside that range silently falls
+  // back to the next font in the stack instead of clamping to the nearest.
   font-weight: 700;
-  font-size: 1.5rem;
-  letter-spacing: -0.02em;
+  font-size: clamp(1.4rem, 6vw, 1.75rem);
+  letter-spacing: -0.035em;
+  line-height: 1;
 }
 
-.brand-word { color: var(--accent); }
-.brand-tears { font-size: 0.85rem; }
+.brand-word {
+  color: var(--accent);
+  // A soft bloom, so the wordmark reads as lit rather than as flat yellow text.
+  text-shadow: 0 0 22px rgba(255, 207, 61, 0.35);
+}
 
+// The five tears are the meme, so they stay -- but at 0.85rem crammed together
+// they rendered as an illegible smear. Sized to sit just under the wordmark's
+// cap height, with real spacing, and allowed to shrink away first on the
+// narrowest screens rather than pushing the account actions off the row.
+.brand-tears {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  font-size: 0.6em;
+  line-height: 1;
+  opacity: 0.95;
+
+  // Drop whole tears rather than clipping a glyph: three on the narrowest
+  // phones, all five as soon as there is room. The joke survives either way.
+  span:nth-child(n + 4) { display: none; }
+}
+
+@media (min-width: 430px) {
+  .brand-tears span:nth-child(n + 4) { display: inline; }
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.nav-search input {
+  width: clamp(84px, 26vw, 210px);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  transition: border-color 140ms ease, width 180ms ease;
+
+  &::placeholder { color: var(--ink-dim); }
+
+  &:focus {
+    outline: none;
+    border-color: var(--accent);
+    width: clamp(140px, 44vw, 260px);
+  }
+}
+
+// The section links: one row that scrolls sideways under pressure instead of
+// wrapping onto a second line. The scrollbar is hidden because the row is
+// short enough to be obviously swipeable.
 .nav-links {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px 20px;
-  font-size: 0.95rem;
-  color: var(--ink-dim);
+  gap: 4px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 10px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 
-  a:hover { color: var(--accent); }
+  &::-webkit-scrollbar { display: none; }
+}
+
+.nav-link {
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--ink-dim);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease;
+
+  &:hover { color: var(--ink); background: var(--surface); }
+  // leptos_router marks the active route, so the current section is obvious
+  // without duplicating that state in a signal.
+  &[aria-current="page"] { color: var(--accent); background: var(--surface-2); }
+}
+
+.nav-signin {
+  flex: none;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  transition: border-color 140ms ease, color 140ms ease;
+
+  &:hover { border-color: var(--accent); color: var(--accent); }
+}
+
+// Above the fold on a laptop there is room for one row, so collapse the two
+// tiers into a single line and let the links sit beside the brand.
+@media (min-width: 800px) {
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  // `display: contents` promotes the brand and the account actions to be
+  // direct children of .nav, so all four regions can be ordered in one row.
+  // Without it, nav-top stays a single flex item and the search/sign-in pair
+  // renders *before* the section links, which read as a mis-ordered header.
+  .nav-top { display: contents; }
+
+  .brand { order: 1; }
+  .nav-links { order: 2; flex: 1; padding: 0; overflow: visible; }
+  .nav-actions { order: 3; }
 }
 
 /* ---------- hero ---------- */
+// Tight on purpose. The old 28/34px padding plus a 2rem-floor h1 pushed the
+// first son most of a phone screen down, so a visitor's first impression was
+// chrome. The copy still leads, it just stops hogging the fold.
 .hero {
-  padding: 28px 0 34px;
+  padding: 22px 0 18px;
 
   h1 {
-    margin: 0 0 8px;
-    font-size: clamp(2rem, 6vw, 3.4rem);
-    letter-spacing: -0.03em;
-    line-height: 1.05;
+    margin: 0 0 6px;
+    font-size: clamp(1.75rem, 8vw, 3.4rem);
+    letter-spacing: -0.035em;
+    line-height: 1.02;
   }
 
-  p { margin: 0; color: var(--ink-dim); max-width: 60ch; }
+  p {
+    margin: 0;
+    color: var(--ink-dim);
+    max-width: 56ch;
+    font-size: 0.95rem;
+  }
+}
+
+@media (min-width: 800px) {
+  .hero { padding: 40px 0 28px; }
+  .hero p { font-size: 1.05rem; }
 }
 
 /* ---------- grid ---------- */
@@ -113,8 +247,16 @@ a { color: inherit; text-decoration: none; }
 
 /* Density presets (see components::density). Cozy matches the original,
    fixed layout; compact and list are opt-in via the toggle. */
-.grid--compact { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-.grid--cozy { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+// minmax(220px) collapsed to a single column at phone widths, which read as a
+// list of big cards rather than a gallery. Explicit 2-up on small screens,
+// auto-fill only once there is room for it to mean something.
+.grid--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.grid--cozy { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+@media (min-width: 560px) {
+  .grid--compact { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .grid--cozy { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+}
 
 .grid--list {
   grid-template-columns: 1fr;
@@ -122,15 +264,27 @@ a { color: inherit; text-decoration: none; }
 
   .card { flex-direction: row; align-items: center; }
   .card-link { flex-direction: row; align-items: center; flex: 1; min-width: 0; }
-  .card-frame { width: 84px; height: 84px; flex: none; aspect-ratio: unset !important; }
+  // A fixed square thumb, not the grid's 4:5 tile.
+  .card-frame { width: 84px; height: 84px; flex: none; aspect-ratio: 1 / 1; }
   .card-meta { flex: 1; min-width: 0; }
-  .card-foot { padding: 0 12px 0 0; flex-direction: row; align-items: center; gap: 12px; }
+  .card-foot { margin-top: 0; padding: 0 12px 0 0; flex-direction: row; align-items: center; gap: 12px; }
+}
+
+// Hidden below 700px: choosing between three grid densities on a 393px screen
+// is a control for a decision the screen width has already made, and it was
+// eating a third of the sortbar. Reappears where it can actually change
+// something.
+.density-toggle { display: none; }
+
+@media (min-width: 700px) {
+  .density-toggle {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
+  }
 }
 
 .density-toggle {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: auto;
 
   button {
     padding: 7px 11px;
@@ -218,19 +372,36 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
-  transition: transform 120ms ease, border-color 120ms ease;
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 160ms ease, box-shadow 160ms ease;
 
   &:hover {
     transform: translateY(-3px);
     border-color: var(--accent);
+    box-shadow: 0 10px 30px -12px rgba(255, 207, 61, 0.45);
   }
 }
 
 .card-frame {
+  position: relative;
   width: 100%;
+  flex: none;
+  overflow: hidden;
   background: var(--surface-2);
+  // Uniform 4:5 tiles. Cropping a thumbnail is the right trade: the gallery
+  // reads as a gallery, and the detail page still shows the son at its true
+  // proportions.
+  aspect-ratio: 4 / 5;
 
+  // Absolute, and that is load-bearing rather than stylistic. As in-flow
+  // content with `height: 100%` against a parent whose height comes from
+  // aspect-ratio (i.e. indefinite), the img fell back to its own intrinsic
+  // ratio and stretched the frame past 4:5 -- measured 0.75 on a 540x720 son
+  // and 0.715 on a 500x700 one, because aspect-ratio does not clamp in-flow
+  // content. Out of flow, inset:0 resolves against the frame's real box.
   img {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
     height: 100%;
@@ -242,9 +413,13 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  font-size: 0.85rem;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  font-size: 0.8rem;
+}
+
+@media (min-width: 560px) {
+  .card-meta { gap: 10px; padding: 10px 12px; font-size: 0.85rem; }
 }
 
 .card-title {
@@ -461,24 +636,37 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---------- sort bar ---------- */
+// One row that scrolls sideways, never wraps. Four sort pills plus three
+// density buttons wrapped onto two ragged lines on a phone -- "sun level"
+// orphaned on its own row with the density icons shoved to the far right --
+// which is what made the page look unlaid-out rather than dense.
 .sortbar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 0 0 18px;
+  gap: 6px;
+  padding: 0 0 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar { display: none; }
 
   button {
-    padding: 7px 14px;
+    flex: none;
+    padding: 7px 13px;
     border: 1px solid var(--line);
     border-radius: 999px;
     background: transparent;
     color: var(--ink-dim);
     font: inherit;
     font-size: 0.85rem;
+    white-space: nowrap;
     cursor: pointer;
+    transition: color 140ms ease, border-color 140ms ease, background 140ms ease,
+      transform 100ms ease;
 
     &:hover { color: var(--ink); }
+    &:active { transform: scale(0.96); }
 
     &.active {
       background: var(--surface-2);
@@ -566,15 +754,23 @@ a { color: inherit; text-decoration: none; }
 .card-link {
   display: flex;
   flex-direction: column;
+  flex: none;
   color: inherit;
   text-decoration: none;
 }
 
 .card-foot {
-  padding: 0 12px 12px;
+  // Pinned to the bottom so the leftover height from row-equalisation lands
+  // as breathing room above the attribution rather than as a ragged gap.
+  margin-top: auto;
+  padding: 0 10px 9px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
+}
+
+@media (min-width: 560px) {
+  .card-foot { padding: 0 12px 12px; gap: 6px; }
 }
 
 /* ---------- attribution ---------- */
@@ -610,17 +806,25 @@ a { color: inherit; text-decoration: none; }
 .sotd {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin: 0 0 24px;
-  padding: 12px;
-  border: 1px solid var(--accent);
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
   border-radius: var(--radius);
-  background: linear-gradient(90deg, rgba(255, 207, 61, 0.12), transparent);
+  background:
+    radial-gradient(120% 160% at 0% 50%, rgba(255, 207, 61, 0.16), transparent 60%),
+    var(--surface);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+
+  &:hover {
+    border-color: var(--accent);
+    box-shadow: 0 10px 30px -14px rgba(255, 207, 61, 0.5);
+  }
 }
 
 .sotd-thumb {
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   border-radius: 10px;
   object-fit: cover;
   flex: none;
@@ -629,22 +833,30 @@ a { color: inherit; text-decoration: none; }
 .sotd-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
 .sotd-label {
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--accent);
   font-weight: 700;
 }
 
 .sotd-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.05rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (min-width: 560px) {
+  .sotd { gap: 14px; padding: 12px; }
+  .sotd-thumb { width: 60px; height: 60px; }
 }
 
 /* ---------- leaderboard ---------- */

@@ -8,8 +8,12 @@ use crate::models::Son;
 pub fn SonCard(son: Son) -> impl IntoView {
     let href = format!("/son/{}", son.id);
 
-    // Reserve the right box before the image loads so the grid does not reflow
-    // as thumbnails stream in.
+    // The son's true aspect, published as a custom property rather than set
+    // directly as `aspect-ratio`. Both matter: reserving the box keeps the
+    // grid from reflowing as thumbnails stream in, but applying each image's
+    // own ratio in a two-up grid made every row stagger to its tallest card
+    // and left dead gaps. CSS now decides -- uniform tiles in the grid views,
+    // the real ratio in list view and on the detail page.
     let ratio = format!("{} / {}", son.width.max(1), son.height.max(1));
 
     // A plain one-time conditional, not <Show>: `when` there expects a
@@ -38,7 +42,7 @@ pub fn SonCard(son: Son) -> impl IntoView {
         // block is its own anchor instead.
         <div class="card">
             <A href=href attr:class="card-link">
-                <div class="card-frame" style:aspect-ratio=ratio>
+                <div class="card-frame" style=format!("--son-ratio: {ratio}")>
                     <img
                         src=son.thumb_url.clone()
                         alt=son.title.clone()

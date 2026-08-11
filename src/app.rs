@@ -91,56 +91,84 @@ fn Nav() -> impl IntoView {
     let user = Resource::new(|| (), |_| current_user());
 
     view! {
+        // Two tiers, not one flat row: on a phone the old single-row nav
+        // wrapped into unstyled soup (three links, then a search box and a
+        // sign-in link at a different scale on their own line). Brand and
+        // account actions belong together on top; the section links are their
+        // own strip that scrolls sideways instead of wrapping.
         <header class="nav">
-            <A href="/" attr:class="brand">
-                <span class="brand-word">"son"</span>
-                <span class="brand-tears">"😭😭😭😭😭"</span>
-            </A>
-            <nav class="nav-links">
-                <A href="/">"gallery"</A>
-                <A href="/upload">"contribute a son"</A>
-                <A href="/leaderboard">"leaderboard"</A>
-                // A plain GET form, not a JS-driven search-as-you-type: it
-                // works with hydration not yet loaded, and /search's own
-                // results render server-side from the query string either way.
-                <form method="get" action="/search" class="nav-search">
-                    <input type="search" name="q" placeholder="search sons…" maxlength="100"/>
-                </form>
-                <Suspense fallback=|| ()>
-                    {move || {
-                        user.get()
-                            .map(|res| match res {
-                                Ok(Some(u)) => {
-                                    view! {
-                                        <span class="nav-user">
-                                            {u.is_admin.then(|| view! { <A href="/admin">"admin"</A> })}
-                                            {u.avatar_url.clone().map(|src| {
-                                                view! { <img class="nav-avatar" src=src alt=""/> }
-                                            })}
-                                            <span>{u.display_name.clone()}</span>
-                                            <form method="post" action="/auth/logout" class="nav-logout">
-                                                <button type="submit" class="link-btn">"sign out"</button>
-                                            </form>
-                                        </span>
+            <div class="nav-top">
+                <A href="/" attr:class="brand">
+                    <span class="brand-word">"son"</span>
+                    // One span per tear rather than a single five-emoji string:
+                    // clipping the string with overflow:hidden sliced a glyph
+                    // in half on narrow screens, which just looked broken. As
+                    // separate elements, CSS can drop whole tears cleanly.
+                    <span class="brand-tears" aria-hidden="true">
+                        <span>"😭"</span>
+                        <span>"😭"</span>
+                        <span>"😭"</span>
+                        <span>"😭"</span>
+                        <span>"😭"</span>
+                    </span>
+                </A>
+                <div class="nav-actions">
+                    // A plain GET form, not a JS-driven search-as-you-type: it
+                    // works with hydration not yet loaded, and /search's own
+                    // results render server-side from the query string either way.
+                    <form method="get" action="/search" class="nav-search" role="search">
+                        <input
+                            type="search"
+                            name="q"
+                            placeholder="search"
+                            aria-label="search sons"
+                            maxlength="100"
+                        />
+                    </form>
+                    <Suspense fallback=|| ()>
+                        {move || {
+                            user.get()
+                                .map(|res| match res {
+                                    Ok(Some(u)) => {
+                                        view! {
+                                            <span class="nav-user">
+                                                {u.is_admin.then(|| view! { <A href="/admin">"admin"</A> })}
+                                                {u.avatar_url.clone().map(|src| {
+                                                    view! { <img class="nav-avatar" src=src alt=""/> }
+                                                })}
+                                                <span class="nav-username">{u.display_name.clone()}</span>
+                                                <form method="post" action="/auth/logout" class="nav-logout">
+                                                    <button type="submit" class="link-btn">"sign out"</button>
+                                                </form>
+                                            </span>
+                                        }
+                                            .into_any()
                                     }
-                                        .into_any()
-                                }
-                                _ => {
-                                    // Ok(None) (never signed in, or Google
-                                    // sign-in isn't configured yet) and Err
-                                    // (couldn't reach D1) get the same
-                                    // sign-in link — nothing useful to tell
-                                    // a visitor apart between those here.
-                                    let return_to = location.pathname.get();
-                                    let href = format!(
-                                        "/auth/google/login?return_to={}",
-                                        urlencode(&return_to),
-                                    );
-                                    view! { <a href=href>"sign in"</a> }.into_any()
-                                }
-                            })
-                    }}
-                </Suspense>
+                                    _ => {
+                                        // Ok(None) (never signed in, or Google
+                                        // sign-in isn't configured yet) and Err
+                                        // (couldn't reach D1) get the same
+                                        // sign-in link — nothing useful to tell
+                                        // a visitor apart between those here.
+                                        let return_to = location.pathname.get();
+                                        let href = format!(
+                                            "/auth/google/login?return_to={}",
+                                            urlencode(&return_to),
+                                        );
+                                        view! {
+                                            <a class="nav-signin" href=href>"sign in"</a>
+                                        }
+                                            .into_any()
+                                    }
+                                })
+                        }}
+                    </Suspense>
+                </div>
+            </div>
+            <nav class="nav-links">
+                <A href="/" attr:class="nav-link">"gallery"</A>
+                <A href="/upload" attr:class="nav-link">"contribute"</A>
+                <A href="/leaderboard" attr:class="nav-link">"leaderboard"</A>
             </nav>
         </header>
     }
