@@ -1,9 +1,19 @@
-# debiantripleu's SSH host key, fetched 2026-08-11 via
-# ssh-keyscan -t ed25519 debiantripleu
+# bulky-server's SSH host key, fetched 2026-08-11 via
+#   ssh-keyscan -t ed25519 bulky-server
 # This is public information (a host key is meant to be shared), pinned here
 # so the CI deploy step verifies it rather than trusting whatever answers on
-# the tailnet at deploy time. Re-fetch and update if debiantripleu's Tailscale
+# the tailnet at deploy time. Re-fetch and update if bulky-server's Tailscale
 # SSH host key ever legitimately rotates.
+#
+# Both entries are the same key: Tailscale SSH presents one host key, and the
+# deploy connects by short name while the tailnet may resolve either.
+100.88.11.83 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
+bulky-server ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
+bulky-server.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
+
+# debiantripleu, kept for when it comes back. Fetched 2026-08-11 the same way.
+# Harmless to pin an extra host: known_hosts is a list of who is trusted, and
+# the deploy only ever connects to the host named in the workflow.
 100.123.135.127 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
 debiantripleu ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
 debiantripleu.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9

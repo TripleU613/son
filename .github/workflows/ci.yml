@@ -96,7 +96,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: echo "image=ghcr.io/${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
-  # Deploys the image build() just produced to debiantripleu. Only runs for
+  # Deploys the image build() just produced to bulky-server. Only runs for
   # pushes to main (never for pull_request, including from forks) -- that
   # trigger has no access to secrets, and this job needs several.
   deploy:
@@ -107,19 +107,19 @@ jobs:
       contents: read
       # Read-only, unlike build's `packages: write`: this job only pulls the
       # image build() already pushed. Needed so GITHUB_TOKEN can authenticate
-      # debiantripleu's pull below.
+      # bulky-server's pull below.
       packages: read
     steps:
       - uses: actions/checkout@v4
 
-      # debiantripleu has no public inbound port at all -- it is reachable only
+      # bulky-server has no public inbound port at all -- it is reachable only
       # over this tailnet, the same way this runner reaches it to deploy.
       - uses: tailscale/github-action@v3
         with:
           authkey: ${{ secrets.TS_CI_AUTHKEY }}
           tags: tag:ci
 
-      - name: pin debiantripleu's host key
+      - name: pin bulky-server's host key
         # Fetched once out-of-band and committed below rather than trusting
         # whatever answers on the IP at deploy time (TOFU inside an automated
         # pipeline is exactly the case host-key checking exists to prevent).
@@ -128,7 +128,7 @@ jobs:
           cat deploy/known_hosts >> ~/.ssh/known_hosts
 
       - name: deploy
-        # debiantripleu has Tailscale SSH enabled: the connecting node's tailnet
+        # bulky-server has Tailscale SSH enabled: the connecting node's tailnet
         # identity IS the credential (see tailnet ACL's "ssh" section), not a
         # keypair -- so no private key is loaded here, only the host-key pin
         # above and this runner's own tag:ci membership from the step before.
@@ -157,9 +157,9 @@ jobs:
           # already exist, which was only true on the previous target because
           # it had been created there by hand. Doing it here means the deploy
           # can stand up a fresh host without manual prep.
-          ssh root@debiantripleu 'mkdir -p /opt/son'
+          ssh root@bulky-server 'mkdir -p /opt/son'
 
-          scp docker-compose.yml root@debiantripleu:/opt/son/docker-compose.yml
+          scp docker-compose.yml root@bulky-server:/opt/son/docker-compose.yml
 
           VARS="SON_IMAGE CF_ACCOUNT_ID CF_D1_DATABASE_ID CF_D1_API_TOKEN \
                 R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE \
@@ -170,18 +170,18 @@ jobs:
           done
 
           # The image is in a private GHCR package, and the `docker login` the
-          # build job did was on the *runner* -- debiantripleu pulls it itself
+          # build job did was on the *runner* -- bulky-server pulls it itself
           # and has no credential of its own, which is exactly why every
           # deploy failed with "error from registry: unauthorized" while the
           # build above succeeded. Piped over stdin rather than passed as an
           # argument so the token never lands in the remote process list.
           printf '%s' "$GHCR_TOKEN" \
-            | ssh root@debiantripleu "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+            | ssh root@bulky-server "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
 
           # `if`, not a bare command, so a failed deploy still reaches the
           # logout below instead of leaving a registry credential sitting in
           # root's ~/.docker/config.json on the server.
-          if ssh root@debiantripleu \
+          if ssh root@bulky-server \
                "$EXPORTS docker compose -f /opt/son/docker-compose.yml pull && \
                 $EXPORTS docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"; then
             status=0
@@ -189,9 +189,9 @@ jobs:
             status=$?
           fi
 
-          ssh root@debiantripleu 'docker logout ghcr.io' || true
+          ssh root@bulky-server 'docker logout ghcr.io' || true
           exit $status
-      # No secret value is ever left on debiantripleu: the deploy variables are
+      # No secret value is ever left on bulky-server: the deploy variables are
       # shell-local env vars for exactly the commands above, passed straight
       # through to docker compose's own ${VAR} interpolation and gone when the
       # SSH session ends, and the one credential that does touch disk (the

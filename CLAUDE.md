@@ -160,12 +160,28 @@ Screenshot at 320 / 360 / 393 / 768 / 1024 / 1440 / 2560. The recurring failures
 are horizontal overflow, header/content width mismatch, and a footer floating
 above the fold on short pages.
 
+## There is no content moderation
+
+Nothing inspects what an upload contains. The local CLIP model, its scores, and
+the embedding-based near-duplicate check are all gone; screening is expected to
+move to an external API. Uploads publish on arrival.
+
+What that means when changing upload code:
+
+- The only pre-publish checks are format/size limits in `storage::decode` and the
+  exact-duplicate pixel hash in `dedupe`. Neither knows anything about content.
+- `sons.son_score` / `sons.nsfw_score` are still `NOT NULL` in the schema and are
+  written as literal `0`. They are kept so an external screening API has somewhere
+  to write. A `0` means "not assessed" — do not build anything that reads them as
+  a score, and do not sort or filter on them.
+- `/admin` and the three-report auto-hide are now the *primary* moderation
+  mechanism, not a backstop. Treat them as load-bearing.
+- `main.rs` logs `content moderation: NONE` at every start. Keep that, or
+  something like it — the absence of screening should never be a surprise.
+
 ## Open risks, not fixed
 
-- CLIP thresholds (`SON_MIN 0.15`, `NSFW_MAX 0.5`) have never been benchmarked
-  against real explicit content, on a site that auto-publishes.
-- `/api/v1/sons/:id` exposes `nsfw_score`, `son_score`, `reports` and
-  `is_public` — moderation internals on a public endpoint.
-- `main.rs` loads the CLIP model *before* binding the port, so nothing listens
-  for minutes on a cold start. The healthcheck's 5m `start-period` papers over
-  it; binding first behind a readiness flag is the real fix.
+- A site that auto-publishes with no screening at all. This is a deliberate,
+  stated choice, not an oversight — but it is the risk.
+- `/api/v1/sons/:id` still exposes `reports` and `is_public` on a public
+  endpoint.

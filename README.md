@@ -13,7 +13,7 @@ Pure Rust, front to back.
 | Server     | Axum 0.8 | What `leptos_axum` runs on anyway |
 | DB         | Cloudflare D1, over its HTTP API | No SQLite driver speaks D1's wire format, so `d1.rs` is a small hand-rolled client. Production has no local disk at all, so there is no local database either — see Deploy |
 | Images     | `image` 0.25 | Decode, bound, thumbnail |
-| Moderation | CLIP ViT-B/32 via `candle` | Pure Rust, CPU. One pass gives NSFW score, son score, and the embedding |
+| Moderation | None (report queue only) | No content analysis at all — see Moderation. Screening is expected to move to an external API |
 | Storage    | Cloudflare R2 (local disk in dev) | Behind a `Backend` trait; images served from media.soncollection.com, not proxied |
 
 ## Running it
@@ -94,95 +94,53 @@ src/
   d1.rs             Cloudflare D1 HTTP client (no sqlx driver exists for D1)
   db.rs             queries against d1.rs, keyset pagination
   storage.rs        decode → bound → thumbnail → Backend (local | r2)
-  moderation/       Moderator trait: clip | stub | deny
+  dedupe.rs         SHA-256 of decoded pixels (exact duplicates only)
   models.rs         types shared by server and wasm
   components/       gallery, card, detail, upload
 
-Dockerfile           multi-stage build; CLIP weights baked in, not fetched at runtime
+Dockerfile           multi-stage build; pinned base digests, pinned Tailwind binary
 docker-compose.yml   deployed as-is to bulky-server; app + cloudflared, no volumes
 deploy/known_hosts   bulky-server's pinned SSH host key (public info, safe to commit)
 ```
 
-## Moderation
+## Moderation: there isn't any, before the fact
 
-The site **auto-publishes anything that clears the thresholds.** There is no
-review queue, so `src/moderation/` is the only thing between an upload and the
-front page.
+**Nothing inspects what an upload contains.** No classifier, no scores, no
+thresholds. An upload is decoded, checked against format and size limits, checked
+for being an exact duplicate, and published. Content screening is expected to move
+to an external API; until it does, this is the state of things and the code says so
+out loud — the server logs `content moderation: NONE` on every start.
 
-The real classifier is **CLIP ViT-B/32 running on CPU through
-[`candle`](https://github.com/huggingface/candle)** — pure Rust, no ONNX C++
-dependency. One image forward pass answers both questions and yields the
-embedding, which is why CLIP was chosen over a dedicated NSFW model.
+The local CLIP ViT-B/32 model that used to do this (via `candle`, scoring both
+"is this a son" and "is this NSFW" in one forward pass) has been removed, along
+with the embedding-based near-duplicate check that rode on the same inference.
+`src/moderation/` is gone.
 
-Scoring is **contrastive, not absolute**. A raw cosine similarity to "porn"
-means nothing on its own, so each question is a softmax over competing captions
-and the score is the probability mass on the positive ones.
+### What still stops a bad upload
 
-That detail matters. The first version used four benign captions and **a plain
-yellow square scored 0.57 NSFW** — images resembling no benign caption had
-nowhere to put their probability mass. The benign caption list is now
-deliberately much longer than the explicit one. Measured after the fix:
+- **Format and size limits** in `storage::decode` (`MAX_PIXELS` rejects
+  decompression bombs before decode, `MAX_UPLOAD_BYTES` caps the request).
+- **Exact duplicate rejection** — SHA-256 of the *decoded pixel buffer*, so the
+  same image re-saved in another format is still caught. This is a hash, not
+  analysis: it says nothing about content.
+- **The report queue.** `db::report` flips `is_public` to 0 after three reports,
+  and `/admin` can hide or delete anything. This is now the *primary* moderation
+  mechanism rather than a backstop.
 
-| image | son | nsfw |
-| --- | --- | --- |
-| meme (caption + face) | 0.999 | 0.062 |
-| plain colour square | 0.007 | 0.009 |
-| spreadsheet screenshot | 0.002 | 0.033 |
-| outdoor scene | 0.003 | 0.006 |
-| advertising banner | 0.019 | 0.017 |
-| random noise | 0.000 | 0.002 |
+### The schema keeps its score columns
 
-**If you add or reorder captions, re-run those numbers.** `NSFW_POSITIVE` and
-`SON_POSITIVE` are counts of leading entries, so inserting a caption in the
-wrong place silently reclassifies it.
+`sons.son_score` and `sons.nsfw_score` are still `NOT NULL` from migration 0001
+and are written as `0`. They were left in place rather than dropped so scores from
+an external screening API have somewhere to land, and so no existing row loses
+data. Nothing reads them: no UI shows them, and no sort or filter depends on them.
+Read a `0` as "not assessed", not as "scored zero". `sons.embedding` is likewise
+retained but no longer written.
 
-### What has NOT been verified
+### If you want review-before-publish instead
 
-The table above only shows **false positives** — safe images are not being
-flagged. Nobody has tested this against actual explicit content, so the
-**false-negative rate is unknown**: whether real NSFW material trips
-`NSFW_MAX = 0.5` is unmeasured. Treat the NSFW gate as unproven until it is
-evaluated against a real benchmark.
-
-### Backends
-
-`MODERATION_BACKEND` selects: `clip` (default), `stub`, `deny`.
-
-If CLIP fails to load, the app falls back to **`deny`, not `stub`** — every
-upload is refused while the gallery keeps serving. A model-loading failure must
-not become an open door. `stub` detects nothing and has to be asked for by name.
-
-### Weights
-
-`CLIP_MODEL_DIR` (default `models/clip-vit-base-patch32`) must contain
-`pytorch_model.bin` and `tokenizer.json`. The app does **not** download them: an
-`hf-hub` dependency pulled in ureq → rustls 0.21 → rustls-webpki 0.101.7 and a
-HIGH advisory, to serve a path only used once per machine. Fetch them yourself,
-and ship them with the deploy rather than pulling 600MB at boot.
-
-That repo publishes **no safetensors** — only `pytorch_model.bin`, loaded via
-`VarBuilder::from_pth`. Preferred over a third-party safetensors mirror for a
-file that decides what gets published.
-
-```bash
-mkdir -p models/clip-vit-base-patch32 && cd $_
-for f in pytorch_model.bin tokenizer.json; do
-  curl -sLO "https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/$f"
-done
-```
-
-### Why every upload stores an embedding
-
-`sons.embedding` is populated from the first upload even though nothing reads it
-yet. It is the dataset for dedupe, "similar sons", and eventually a generator —
-and it cannot be backfilled for images that were never embedded.
-
-### Safety valve
-
-Auto-publish is survivable because of `db::report`: three reports flip
-`is_public` to 0 automatically, and any son can be pulled with one UPDATE. If you'd
-rather hold uploads for review instead, it's one branch in `upload_route::upload`
-(insert with `is_public = 0`).
+One branch in `upload_route::upload`: insert with `is_public = 0` and let `/admin`
+release them. That is the only change needed — the admin queue and the
+hide/unhide/delete paths already exist.
 
 ## Deploy
 
@@ -287,10 +245,13 @@ soncollection.com, so it isn't exempted just for living in a different file.
 
 ## Not built yet
 
-- Evaluating the NSFW gate against a real benchmark (see above)
-- Perceptual-hash dedupe on repost (`img_hash`)
-- Admin view for the report queue
-- Google sign-in — needs an OAuth 2.0 Web Client ID; a service account cannot
-  do user login
-- Similarity search over the stored embeddings
+- **Content screening.** Nothing checks what an upload depicts. The intended
+  replacement is an external API called from `upload_route::upload`, writing its
+  verdict into the `son_score`/`nsfw_score` columns that are still there waiting
+  for it.
+- Near-duplicate detection (a resize or recompress of an existing son). The
+  exact-hash check does not catch these; a perceptual hash (`img_hash`) would,
+  without any content analysis.
+- Google sign-in is built but dormant — the redirect URIs still need registering
+  in the Google console.
 - The generator

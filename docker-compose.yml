@@ -1,11 +1,11 @@
-# Deployed on debiantripleu. No bind mounts, no named volumes: "no storage on
+# Deployed on bulky-server. No bind mounts, no named volumes: "no storage on
 # the server" is enforced structurally here, not just by convention -- there
 # is nowhere in this file a volume could even be declared for the app to write
 # application data into. Uploads go to R2, all state lives in D1.
 #
 # The app container publishes no host port at all. cloudflared is the only way
 # in, reaching `son-app` by its Compose service name over the private network
-# this file defines -- nothing on debiantripleu needs an inbound firewall rule
+# this file defines -- nothing on bulky-server needs an inbound firewall rule
 # for web traffic, matching how it is already reached only over Tailscale SSH.
 #
 # Every value below except the two image references comes from the calling
@@ -25,12 +25,22 @@ services:
     # unbounded container on a shared host is the real defect, so the worst
     # case here is this container being killed rather than the box going dark.
     #
-    # 4g/2cpu is sized against the current target (debiantripleu: 15.4GB RAM,
-    # ~10.7GB available, 4 cores) -- comfortably above what CLIP needs, while
-    # still leaving the host's other 13 containers their headroom.
-    mem_limit: 4g
-    memswap_limit: 4g
-    cpus: 2.0
+    # 1g/1cpu now that nothing loads a model. The 4g/2cpu this used to reserve
+    # was almost entirely CLIP's weights and inference, and that reservation is
+    # why this moved off bulky-server in the first place -- 4g on a 3.8GB box
+    # with tor already resident is how it went dark for ~10 minutes. What remains
+    # is image decode and resize, bounded by storage::MAX_PIXELS.
+    #
+    # Measured on bulky-server before pointing this back at it: 3.8GB total,
+    # 2.8GB available, tor at 780MB, 2 cores, no other containers running. 1g of
+    # a 2.8GB budget leaves the host room to stay reachable even if this
+    # container misbehaves -- which is the whole point of the limit.
+    #
+    # Raise it deliberately if screening ever comes back in-process rather than
+    # as an out-of-process API call.
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
     # /tmp only, for whatever transient scratch space the process or its
     # libraries expect (e.g. temp files during image decode) -- not a place
     # application data lives, and it does not survive a container restart.

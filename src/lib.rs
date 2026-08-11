@@ -19,8 +19,7 @@ pub mod d1;
 pub mod db;
 #[cfg(feature = "ssr")]
 pub mod dedupe;
-#[cfg(feature = "ssr")]
-pub mod moderation;
+
 #[cfg(feature = "ssr")]
 pub mod oauth_route;
 #[cfg(feature = "ssr")]

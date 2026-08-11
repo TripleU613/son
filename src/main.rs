@@ -39,12 +39,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("storage backend: {}", storage.name());
     soncollection::storage::set_backend(storage);
 
-    // Loading CLIP downloads ~600MB on a cold cache and takes a few seconds
-    // warm, so it happens here rather than on a request path. Blocking, hence
-    // spawn_blocking to keep the runtime free.
-    let moderator = tokio::task::spawn_blocking(soncollection::moderation::from_env).await?;
-    tracing::info!("moderation: {}", moderator.name());
-    soncollection::upload_route::set_moderator(moderator);
+    // Said out loud at startup, every start, because it is the kind of thing
+    // that is easy to forget is true: nothing inspects an upload's contents.
+    tracing::warn!(
+        "content moderation: NONE — uploads publish unscreened; only /admin reports can remove them"
+    );
 
     if soncollection::auth::google_configured() {
         tracing::info!("Google sign-in: configured");

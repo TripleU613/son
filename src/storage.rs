@@ -9,9 +9,8 @@
 //! and anything smuggled after the image data), carries an invisible
 //! provenance watermark (see `watermark`), and gets this site's own text
 //! metadata written back in rather than whatever the source file had.
-//! Duplicate detection (`dedupe`) and moderation (`moderation`) both happen
-//! in `upload_route` before any of this runs -- this module only ever sees
-//! an image that has already cleared both.
+//! Duplicate detection (`dedupe`) happens in `upload_route` before any of this
+//! runs, so this module only ever sees an image that is not already here.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -97,7 +96,7 @@ pub struct Stored {
 const WATERMARK_PREFIX: &str = "son-collection:v1:";
 
 /// Decode bytes into an image, rejecting anything oversized before it is
-/// rasterized. Separate from `store` so moderation can inspect the pixels
+/// rasterized. Separate from `store` so the caller can hash the pixels
 /// before anything is persisted.
 pub fn decode(bytes: &[u8]) -> anyhow::Result<DynamicImage> {
     if bytes.len() > MAX_UPLOAD_BYTES {
@@ -138,8 +137,9 @@ pub fn thumb_key(id: &str) -> String {
 }
 
 /// Persist the original (re-encoded to PNG, which strips EXIF and any payload
-/// smuggled after the image data) plus a thumbnail. Call only after moderation
-/// has passed.
+/// smuggled after the image data) plus a thumbnail. Call only after the
+/// duplicate check has passed -- this writes files, and a rejected upload
+/// should leave none behind.
 ///
 /// `title`/`uploader_name` are written back into the original's PNG text
 /// chunks -- provenance metadata the site controls, replacing whatever

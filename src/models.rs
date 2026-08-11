@@ -12,10 +12,6 @@ pub struct Son {
     pub thumb_url: String,
     pub width: u32,
     pub height: u32,
-    /// How much the classifier believes this is a Son variant. 0.0..=1.0
-    pub son_score: f32,
-    /// How much the classifier believes this is NSFW. 0.0..=1.0
-    pub nsfw_score: f32,
     pub created_at: String,
     pub is_public: bool,
     pub reports: i64,
@@ -33,13 +29,6 @@ pub struct Son {
 pub struct Tag {
     pub name: String,
     pub slug: String,
-}
-
-impl Son {
-    /// Text for the little badge on the card.
-    pub fn sonness_label(&self) -> String {
-        format!("{:.0}% son", self.son_score * 100.0)
-    }
 }
 
 /// A page of sons plus the cursor needed to ask for the next one.
@@ -60,8 +49,6 @@ pub enum Sort {
     MostLiked,
     /// A-Z by title.
     Az,
-    /// Highest "sun level" (son_score) first.
-    SonScore,
 }
 
 impl Sort {
@@ -70,7 +57,6 @@ impl Sort {
             Sort::Newest => "newest",
             Sort::MostLiked => "liked",
             Sort::Az => "az",
-            Sort::SonScore => "sonscore",
         }
     }
 
@@ -78,7 +64,6 @@ impl Sort {
         match s {
             "liked" => Sort::MostLiked,
             "az" => Sort::Az,
-            "sonscore" => Sort::SonScore,
             _ => Sort::Newest,
         }
     }
@@ -188,10 +173,11 @@ pub enum UploadResult {
     Ok {
         son: Son,
     },
+    /// Refused before anything was stored. The only remaining reason is an
+    /// exact duplicate -- there is no content analysis, so nothing here is a
+    /// judgement about what the image depicts.
     Rejected {
         reason: String,
-        son_score: f32,
-        nsfw_score: f32,
     },
     Error {
         message: String,

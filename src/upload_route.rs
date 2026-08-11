@@ -1,26 +1,21 @@
 //! `POST /api/upload` — multipart image intake.
 //!
-//! Order matters and is deliberate: decode+hash → moderate → dedupe-check →
-//! store (watermark + provenance metadata) → insert. Nothing is written to
-//! disk until the classifier has passed it and the dedupe checks have
-//! cleared, so a rejected or duplicate upload leaves no trace to clean up.
+//! Order: decode+hash → duplicate check → store (watermark + provenance
+//! metadata) → insert. Nothing is written until the duplicate check clears, so a
+//! rejected upload leaves no files to clean up.
+//!
+//! **No content analysis happens here.** Uploads are published as they arrive.
+//! There is no classifier deciding whether an image is a son, or whether it is
+//! explicit — the local CLIP model that used to make both calls was removed, and
+//! screening is expected to move to an external API. Until it does, the only
+//! things standing between an upload and the public gallery are the format and
+//! size limits in `storage::decode` and the human report queue in `/admin`.
 
 use crate::models::UploadResult;
-use crate::moderation::Moderator;
 use axum::extract::Multipart;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-
-static MODERATOR: std::sync::OnceLock<Box<dyn Moderator>> = std::sync::OnceLock::new();
-
-pub fn set_moderator(m: Box<dyn Moderator>) {
-    let _ = MODERATOR.set(m);
-}
-
-fn moderator() -> &'static dyn Moderator {
-    MODERATOR.get().expect("moderator not initialized").as_ref()
-}
 
 // `HeaderMap` before `Multipart`: axum requires body-consuming extractors
 // (Multipart reads the request body) to come last in a handler's arguments.
@@ -72,8 +67,8 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
     // runtime's worker threads so one huge image can't stall request handling.
     // The content hash rides along in the same blocking call: it's a hash of
     // the decoded pixel buffer (not the raw upload bytes), computed here
-    // because this is the one place that buffer exists before it's consumed
-    // by moderation and storage.
+    // because this is the one place that buffer exists before storage
+    // consumes it.
     let decoded = tokio::task::spawn_blocking(move || {
         let img = crate::storage::decode(&bytes)?;
         let hash = crate::dedupe::sha256_hex(img.to_rgba8().as_raw());
@@ -92,47 +87,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         }
     };
 
-    let verdict = match tokio::task::spawn_blocking(move || {
-        let v = moderator().assess(&img);
-        (v, img)
-    })
-    .await
-    {
-        Ok((Ok(v), img)) => (v, img),
-        // Fail closed: a classifier error rejects rather than publishes.
-        Ok((Err(e), _)) => {
-            tracing::error!("moderation failed: {e}");
-            return bad(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "could not assess this image".into(),
-            );
-        }
-        Err(e) => {
-            return bad(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("moderation panicked: {e}"),
-            )
-        }
-    };
-
-    let (verdict, img) = verdict;
-
-    if let Some(reason) = verdict.rejection_reason() {
-        tracing::info!(
-            son = verdict.son_score,
-            nsfw = verdict.nsfw_score,
-            "upload rejected"
-        );
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(UploadResult::Rejected {
-                reason: reason.to_string(),
-                son_score: verdict.son_score,
-                nsfw_score: verdict.nsfw_score,
-            }),
-        );
-    }
-
     // Exact duplicate: same decoded pixels as something already here,
     // regardless of container format. A single indexed lookup.
     match crate::db::find_by_hash(&content_hash).await {
@@ -145,8 +99,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
                         "this exact image is already in the collection: /son/{}",
                         existing.id
                     ),
-                    son_score: verdict.son_score,
-                    nsfw_score: verdict.nsfw_score,
                 }),
             );
         }
@@ -154,26 +106,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         // A dedupe-check outage shouldn't block an otherwise-good upload;
         // log loudly and let it through rather than fail the whole request.
         Err(e) => tracing::error!("hash dedupe check failed: {e}"),
-    }
-
-    // Near duplicate: a resize/recompress/light crop of something already
-    // here, caught via CLIP embedding similarity instead of an exact hash.
-    if let Some(embedding) = verdict.embedding.as_deref() {
-        match crate::dedupe::find_near_duplicate(embedding).await {
-            Ok(Some(existing_id)) => {
-                tracing::info!(existing = existing_id, "upload rejected: near duplicate");
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(UploadResult::Rejected {
-                        reason: format!("a very similar son is already here: /son/{existing_id}"),
-                        son_score: verdict.son_score,
-                        nsfw_score: verdict.nsfw_score,
-                    }),
-                );
-            }
-            Ok(None) => {}
-            Err(e) => tracing::error!("near-duplicate check failed: {e}"),
-        }
     }
 
     let title = clean_title(&title);
@@ -204,9 +136,6 @@ pub async fn upload(headers: axum::http::HeaderMap, mut mp: Multipart) -> impl I
         thumb_url: &stored.thumb_url,
         width: stored.width,
         height: stored.height,
-        son_score: verdict.son_score,
-        nsfw_score: verdict.nsfw_score,
-        embedding: verdict.embedding.as_deref(),
         content_hash: &content_hash,
         uploader_id: uploader.as_ref().map(|u| u.id.as_str()),
         uploader: uploader.as_ref().map(|u| crate::models::Uploader {

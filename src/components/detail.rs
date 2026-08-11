@@ -4,7 +4,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 
 use crate::api::get_son;
-use crate::components::icon::{Ico, LuDownload, LuSun, LuUserRound};
+use crate::components::icon::{Ico, LuDownload, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::more_sons::MoreSons;
 use crate::components::report::ReportForm;
@@ -20,12 +20,7 @@ fn describe(s: &Son) -> String {
         Some(u) => format!(" Contributed by {}.", u.display_name),
         None => String::new(),
     };
-    format!(
-        "{} — {} in the son collection.{}",
-        s.title,
-        s.sonness_label(),
-        by
-    )
+    format!("{} — in the son collection.{}", s.title, by)
 }
 
 /// `schema.org/ImageObject` JSON-LD. Structured data is one of the few
@@ -186,11 +181,6 @@ pub fn SonDetail() -> impl IntoView {
 
                                     <div>
                                         <h1 class="m-0 mb-3 text-[1.375rem] font-bold tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
-
-                                        <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-line px-2.5 py-1 text-[0.8125rem] font-semibold text-accent">
-                                            <Ico icon=LuSun size=15/>
-                                            <span>{s.sonness_label()}</span>
-                                        </div>
 
                                         <div class="flex flex-wrap items-center gap-2 pb-3 text-[0.8125rem] text-ink-3">
                                             <Ico icon=LuUserRound size=14/>

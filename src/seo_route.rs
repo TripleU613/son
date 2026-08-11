@@ -35,8 +35,8 @@ pub async fn llms_txt() -> impl IntoResponse {
          > Every image is somebody's son. A community gallery of the \"son\" \
          meme and its wordplay variants -- Sonion, Capri-Son, Dy-Son, \
          Sonflower, and anything else with a son hidden in it. Free, \
-         anonymous-friendly uploads, auto-moderated for content and \
-         son-ness.\n\
+         anonymous-friendly uploads, moderated by report after \
+         publishing.\n\
          \n\
          ## Pages\n\
          \n\

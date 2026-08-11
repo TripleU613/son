@@ -66,9 +66,15 @@ pub fn Privacy() -> impl IntoView {
 
             <h2>"Content moderation"</h2>
             <p>
-                "Every upload is automatically screened before it's published. The screening model's \
-                embeddings are stored to help detect duplicates and improve moderation over time -- \
-                not to identify who is in an image."
+                "Uploads are published immediately. Nothing analyses what an image contains before \
+                it goes live -- there is no automated screening at present. What we do check is \
+                whether the image is byte-for-byte identical to one already here, using a hash of \
+                its pixels, which tells us nothing about the content itself."
+            </p>
+            <p>
+                "Moderation is therefore after the fact and depends on reports. If you see something \
+                that shouldn't be here, use the report button -- that is the mechanism, not a \
+                fallback for one."
             </p>
 
             <h2>"Removal"</h2>
@@ -119,16 +125,16 @@ pub fn Terms() -> impl IntoView {
 
             <h2>"Moderation"</h2>
             <p>
-                "Uploads are screened automatically and can be reported by anyone after publishing. We \
-                may remove or hide any content, at any time, for any reason, including content that \
-                clears automated screening but is later found to violate these terms."
+                "Uploads are published without prior review and can be reported by anyone. We may \
+                remove or hide any content, at any time, for any reason. Because nothing screens an \
+                upload before it appears, content that breaks these rules can be visible until \
+                someone reports it."
             </p>
 
             <h2>"No warranty"</h2>
             <p>
-                "The site is provided \"as is,\" with no warranty of any kind. Automated moderation is \
-                not perfect -- it will occasionally miss things it shouldn't and flag things it should \
-                have let through."
+                "The site is provided \"as is,\" with no warranty of any kind. There is no automated \
+                moderation, so nothing prevents an upload from appearing before a human has seen it."
             </p>
 
             <h2>"Limitation of liability"</h2>

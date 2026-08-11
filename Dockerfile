@@ -42,7 +42,7 @@ WORKDIR /build
 # limitation, not a guess: docker/build-push-action#1011). A layer, on the
 # other hand, is exactly what `type=gha` restores, and this layer only
 # invalidates when Cargo.toml/Cargo.lock change -- not on every source edit --
-# so candle/aws-sdk-s3/leptos and cargo-leptos's own build only recompile from
+# so aws-sdk-s3/leptos/image and cargo-leptos's own build only recompile from
 # scratch when a dependency actually changes.
 # Plain `cargo build`, not `cargo leptos build`, against the placeholder:
 # cargo-leptos's build also runs wasm-bindgen post-processing, Tailwind CSS
@@ -54,7 +54,7 @@ WORKDIR /build
 # steps are comparatively instant and only need to happen once, for real,
 # after the actual source is copied in below.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src/components src/storage src/moderation \
+RUN mkdir -p src/components src/storage \
     && echo 'fn main() {}' > src/main.rs \
     && echo '' > src/lib.rs \
     && cargo build --release --no-default-features --features ssr \
@@ -75,17 +75,6 @@ RUN touch src/main.rs src/lib.rs
 
 RUN cargo leptos build --release
 
-# ---- fetch CLIP weights in their own stage -------------------------------
-# Kept separate from both the builder (which has no reason to need curl) and
-# the runtime image (which has no reason to keep it after this copy), so a
-# public reading of the final image's layers shows only what actually runs.
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS model
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /model
-RUN curl -fsSLO https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/pytorch_model.bin \
-    && curl -fsSLO https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/tokenizer.json
-
 # ---- runtime ---------------------------------------------------------------
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
@@ -101,7 +90,6 @@ COPY --from=builder --chown=son:son /build/target/site ./site
 # <link> falls back to the unhashed name, which 404s once hash-files is on --
 # i.e. a silently style-less site.
 COPY --from=builder --chown=son:son /build/target/release/hash.txt ./hash.txt
-COPY --from=model --chown=son:son /model /app/models/clip-vit-base-patch32
 
 # No storage: the image ships with no writable data directory, and nothing
 # under /app is written to at runtime. Uploads go to R2, all state lives in D1.
@@ -117,8 +105,7 @@ USER son
 # would have gone unstyled the moment that expired.
 ENV LEPTOS_SITE_ADDR=0.0.0.0:3100 \
     LEPTOS_SITE_ROOT=/app/site \
-    LEPTOS_HASH_FILES=true \
-    CLIP_MODEL_DIR=/app/models/clip-vit-base-patch32
+    LEPTOS_HASH_FILES=true
 
 EXPOSE 3100
 
@@ -126,15 +113,11 @@ EXPOSE 3100
 # no curl/wget in the image, keeping the runtime stage to exactly
 # ca-certificates plus the binary and its assets.
 #
-# start-period is 5m, not the 40s this originally had: main.rs loads the CLIP
-# model *before* it binds the port, so nothing is listening until that
-# finishes. 40s was measured on a fast dev machine with a warm page cache and
-# was simply wrong for a contended shared host, where the container was
-# marked unhealthy while it was still legitimately starting up. The real
-# ordering problem (bind first, load the model behind a readiness flag) is
-# worth fixing properly; this makes the healthcheck stop lying in the
-# meantime.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5m --retries=3 \
+# start-period is back down to 40s: it was raised to 5m only because main.rs
+# loaded a ~600MB CLIP model before binding the port, so nothing listened for
+# minutes on a cold start. With no model to load, the server binds almost
+# immediately and a 5m grace period would just delay noticing a real failure.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD bash -c 'echo > /dev/tcp/127.0.0.1/3100' || exit 1
 
 ENTRYPOINT ["/app/soncollection"]

@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::d1::D1;
 use crate::models::{LeaderboardEntry, Son, SonPage, Sort, Uploader, User, PAGE_SIZE};
@@ -34,7 +34,7 @@ pub fn client() -> &'static D1 {
 // path (every gallery page, every detail view), and joining costs nothing D1
 // doesn't already pay for a single indexed lookup.
 const SON_SELECT: &str = "SELECT s.id, s.title, s.orig_url, s.thumb_url, s.width, s.height, \
-     s.son_score, s.nsfw_score, s.created_at, s.is_public, s.reports, s.likes, \
+     s.created_at, s.is_public, s.reports, s.likes, \
      u.display_name AS uploader_name, u.avatar_url AS uploader_avatar \
      FROM sons s LEFT JOIN users u ON u.id = s.uploader_id";
 
@@ -48,8 +48,6 @@ struct SonRow {
     thumb_url: String,
     width: i64,
     height: i64,
-    son_score: f64,
-    nsfw_score: f64,
     created_at: String,
     is_public: i64,
     reports: i64,
@@ -67,8 +65,6 @@ impl From<SonRow> for Son {
             thumb_url: r.thumb_url,
             width: r.width as u32,
             height: r.height as u32,
-            son_score: r.son_score as f32,
-            nsfw_score: r.nsfw_score as f32,
             created_at: r.created_at,
             is_public: r.is_public != 0,
             reports: r.reports,
@@ -86,8 +82,8 @@ impl From<SonRow> for Son {
 }
 
 /// Cursors are opaque to the client but encode the full sort key, because
-/// keyset pagination needs a total order. `likes`/`son_score` alone are not
-/// one — many sons share a value — so those cursors carry a tie-breaker too.
+/// keyset pagination needs a total order. `likes` alone is not one — many sons
+/// share a value — so that cursor carries a tie-breaker too.
 /// Titles can't contain control characters (`upload_route::clean_title`
 /// strips them), so NUL is a safe separator there even though `|` could
 /// theoretically appear in free-text titles.
@@ -96,7 +92,6 @@ fn encode_cursor(s: &Son, sort: Sort) -> String {
         Sort::Newest => s.created_at.clone(),
         Sort::MostLiked => format!("{}|{}", s.likes, s.created_at),
         Sort::Az => format!("{}\u{0}{}", s.title, s.id),
-        Sort::SonScore => format!("{}|{}", s.son_score, s.id),
     }
 }
 
@@ -113,13 +108,6 @@ fn decode_az_cursor(cursor: &str) -> (String, String) {
     match cursor.split_once('\u{0}') {
         Some((title, id)) => (title.to_string(), id.to_string()),
         None => (String::new(), String::new()),
-    }
-}
-
-fn decode_sonscore_cursor(cursor: &str) -> (f64, String) {
-    match cursor.split_once('|') {
-        Some((score, id)) => (score.parse().unwrap_or(f64::MAX), id.to_string()),
-        None => (f64::MAX, String::new()),
     }
 }
 
@@ -180,29 +168,6 @@ pub async fn list_public(
                     vec![
                         json!(i64::from(cursor.is_some())),
                         json!(title),
-                        json!(id),
-                        json!(PAGE_SIZE + 1),
-                    ],
-                )
-                .await?
-        }
-        Sort::SonScore => {
-            let (score, id) = cursor
-                .map(decode_sonscore_cursor)
-                .unwrap_or((f64::MAX, String::new()));
-            let sql = format!(
-                "{SON_SELECT} \
-                 WHERE s.is_public = 1 \
-                   AND (?1 = 0 OR s.son_score < ?2 OR (s.son_score = ?2 AND s.id < ?3)) \
-                 ORDER BY s.son_score DESC, s.id DESC \
-                 LIMIT ?4"
-            );
-            client()
-                .query(
-                    &sql,
-                    vec![
-                        json!(i64::from(cursor.is_some())),
-                        json!(score),
                         json!(id),
                         json!(PAGE_SIZE + 1),
                     ],
@@ -300,37 +265,6 @@ pub async fn find_by_hash(hash: &str) -> anyhow::Result<Option<Son>> {
     Ok(rows.into_iter().next().map(Son::from))
 }
 
-/// Every son's CLIP embedding, for the near-duplicate scan in `dedupe`. Rows
-/// with no embedding (moderation backend was `stub`/`deny`, or the row
-/// predates embeddings existing at all) are skipped, not returned as an
-/// empty vector -- an empty embedding would otherwise compare as
-/// "maximally dissimilar" to everything, which is a misleading answer for
-/// "we don't actually know."
-pub async fn all_embeddings() -> anyhow::Result<Vec<(String, Vec<f32>)>> {
-    #[derive(Deserialize)]
-    struct Row {
-        id: String,
-        embedding: Option<Vec<u8>>,
-    }
-    let rows: Vec<Row> = client()
-        .query(
-            "SELECT id, embedding FROM sons WHERE embedding IS NOT NULL",
-            vec![],
-        )
-        .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            let bytes = r.embedding?;
-            let floats = bytes
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
-            Some((r.id, floats))
-        })
-        .collect())
-}
-
 pub struct NewSon<'a> {
     pub id: &'a str,
     pub title: &'a str,
@@ -338,9 +272,6 @@ pub struct NewSon<'a> {
     pub thumb_url: &'a str,
     pub width: u32,
     pub height: u32,
-    pub son_score: f32,
-    pub nsfw_score: f32,
-    pub embedding: Option<&'a [f32]>,
     /// SHA-256 of the decoded pixel buffer, for exact-duplicate detection.
     /// Always computed for a new upload; only rows inserted before this
     /// column existed lack one.
@@ -360,20 +291,19 @@ pub struct NewSon<'a> {
 
 pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
     let created_at = chrono::Utc::now().to_rfc3339();
-    // D1 has no native blob param type; a BLOB column round-trips as a plain
-    // JSON array of byte values, verified directly against the API before
-    // relying on it here.
-    let blob: Value = match new.embedding {
-        Some(e) => json!(e.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()),
-        None => Value::Null,
-    };
 
+    // son_score/nsfw_score are written as literal 0: the columns are NOT NULL
+    // from migration 0001 and nothing scores an upload any more. They are left
+    // in the schema rather than dropped, so that scores from an external
+    // screening API have somewhere to land later and so no existing row loses
+    // data. Read as "not assessed" -- nothing displays them, and no ordering or
+    // filtering depends on them.
     client()
         .exec(
             "INSERT INTO sons (id, title, orig_url, thumb_url, width, height, \
-                               son_score, nsfw_score, embedding, created_at, is_public, reports, \
+                               son_score, nsfw_score, created_at, is_public, reports, \
                                uploader_id, content_hash) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0,?11,?12)",
+             VALUES (?1,?2,?3,?4,?5,?6,0,0,?7,1,0,?8,?9)",
             vec![
                 json!(new.id),
                 json!(new.title),
@@ -381,9 +311,6 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
                 json!(new.thumb_url),
                 json!(new.width),
                 json!(new.height),
-                json!(new.son_score),
-                json!(new.nsfw_score),
-                blob,
                 json!(created_at),
                 json!(new.uploader_id),
                 json!(new.content_hash),
@@ -398,8 +325,6 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
         thumb_url: new.thumb_url.to_string(),
         width: new.width,
         height: new.height,
-        son_score: new.son_score,
-        nsfw_score: new.nsfw_score,
         created_at,
         is_public: true,
         reports: 0,

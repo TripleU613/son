@@ -195,20 +195,13 @@ pub fn Upload() -> impl IntoView {
                             }
                                 .into_any()
                         }
-                        UploadResult::Rejected { reason, son_score, nsfw_score } => {
+                        UploadResult::Rejected { reason } => {
                             view! {
                                 <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
                                     <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-surface-raised text-danger">
                                         <Ico icon=LuCircleAlert size=18/>
                                     </span>
                                     <p class="m-0 text-[0.9375rem] font-semibold text-ink">{reason}</p>
-                                    <p class="text-[0.85rem] tabular-nums text-ink-3">
-                                        {format!(
-                                            "sonness {:.0}% · nsfw {:.0}%",
-                                            son_score * 100.0,
-                                            nsfw_score * 100.0,
-                                        )}
-                                    </p>
                                 </div>
                             }
                                 .into_any()

@@ -67,11 +67,6 @@ pub fn SortChips(#[prop(optional, into)] class: Option<String>) -> impl IntoView
         ),
         (GalleryView::Sort(Sort::Az), "A–Z", "Sort A to Z"),
         (
-            GalleryView::Sort(Sort::SonScore),
-            "Sun",
-            "Sort by sun level",
-        ),
-        (
             GalleryView::SonOfDay,
             "Son of the day",
             "Show son of the day",
