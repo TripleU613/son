@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
+use leptos_meta::{provide_meta_context, HashedStylesheet, MetaTags, Title};
 use leptos_router::components::{Route, Router, Routes, A};
 use leptos_router::hooks::use_location;
 use leptos_router::{path, SsrMode};
@@ -33,7 +33,12 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
                 <link rel="icon" href=FAVICON/>
                 <AutoReload options=options.clone()/>
-                <HydrationScripts options/>
+                <HydrationScripts options=options.clone()/>
+                // Emitted here rather than as a <Stylesheet> inside App: the
+                // hashed filename lives in a file next to the binary, so this
+                // needs LeptosOptions, which only exists server-side. See
+                // `hash-files` in Cargo.toml for why the hash matters.
+                <HashedStylesheet options=options.clone() id="leptos"/>
                 <MetaTags/>
             </head>
             <body>
@@ -48,7 +53,6 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/soncollection.css"/>
         <Title text="son collection"/>
 
         <Router>

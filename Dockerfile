@@ -69,6 +69,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=builder --chown=son:son /build/target/release/soncollection ./soncollection
 COPY --from=builder --chown=son:son /build/target/site ./site
+# hash.txt must sit beside the binary, not in site/: leptos_meta's
+# HashedStylesheet resolves it from current_exe()'s directory. Without it the
+# <link> falls back to the unhashed name, which 404s once hash-files is on --
+# i.e. a silently style-less site.
+COPY --from=builder --chown=son:son /build/target/release/hash.txt ./hash.txt
 COPY --from=model --chown=son:son /model /app/models/clip-vit-base-patch32
 
 # No storage: the image ships with no writable data directory, and nothing
