@@ -18,6 +18,16 @@ services:
     image: ${SON_IMAGE}
     restart: unless-stopped
     read_only: true
+    # Hard resource ceilings. bulky-server is NOT a dedicated box -- it also
+    # runs postgres, grafana, loki, bugsink and ntfy -- and the first deploy
+    # of this file had no limits at all, which let CLIP's model load starve
+    # the host badly enough that SSH and ICMP both stopped answering. An
+    # unbounded container on a shared host is the actual defect there; these
+    # limits mean the worst case is this container dying instead of the box
+    # becoming unreachable.
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 2.0
     # /tmp only, for whatever transient scratch space the process or its
     # libraries expect (e.g. temp files during image decode) -- not a place
     # application data lives, and it does not survive a container restart.

@@ -84,7 +84,16 @@ EXPOSE 3100
 # A TCP-level liveness check via bash's /dev/tcp, not a full HTTP GET: it needs
 # no curl/wget in the image, keeping the runtime stage to exactly
 # ca-certificates plus the binary and its assets.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+#
+# start-period is 5m, not the 40s this originally had: main.rs loads the CLIP
+# model *before* it binds the port, so nothing is listening until that
+# finishes. 40s was measured on a fast dev machine with a warm page cache and
+# was simply wrong for a contended shared host, where the container was
+# marked unhealthy while it was still legitimately starting up. The real
+# ordering problem (bind first, load the model behind a readiness flag) is
+# worth fixing properly; this makes the healthcheck stop lying in the
+# meantime.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5m --retries=3 \
     CMD bash -c 'echo > /dev/tcp/127.0.0.1/3100' || exit 1
 
 ENTRYPOINT ["/app/soncollection"]
