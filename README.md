@@ -1,7 +1,7 @@
 # son collection
 
 A gallery for the **"Son 😭😭😭😭😭"** meme and its endless variants — Sonion,
-Capri-Son, Dy-Son, Sonflower, Sontato. Free uploads, no accounts.
+Capri-Son, Dy-Son, Sonflower, Sontato. Free uploads.
 
 Pure Rust, front to back.
 
