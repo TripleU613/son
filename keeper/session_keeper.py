@@ -29,11 +29,12 @@ import asyncio
 import logging
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
 
+import boto3
 import httpx
+from botocore.config import Config
 from playwright.async_api import async_playwright
 
 log = logging.getLogger("session-keeper")
@@ -54,45 +55,41 @@ PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
 WANTED = ("__Secure-1PSID", "__Secure-1PSIDTS")
 
 
-def _r2_env() -> dict[str, str] | None:
-    keys = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "CF_ACCOUNT_ID")
-    if not all(os.environ.get(k) for k in keys):
-        return None
-    return {k: os.environ[k] for k in keys}
+def _r2():
+    """An S3 client pointed at R2, or None when R2 is not configured.
 
-
-def _aws(*args: str) -> subprocess.CompletedProcess:
-    """R2 over the S3 API, via the aws CLI.
-
-    The CLI rather than boto3 because this container needs it for exactly two
-    operations and the CLI is one apt line, where boto3 is a dependency tree to
-    keep pinned for a copy and a paste.
+    boto3 rather than the aws CLI: `awscli` has no installation candidate on the
+    Playwright image's Ubuntu base, and a pip dependency is one pinned line where
+    apt was a whole layer plus a repository to enable.
     """
-    env = dict(os.environ)
-    env["AWS_ACCESS_KEY_ID"] = os.environ["R2_ACCESS_KEY_ID"]
-    env["AWS_SECRET_ACCESS_KEY"] = os.environ["R2_SECRET_ACCESS_KEY"]
-    env["AWS_DEFAULT_REGION"] = "auto"
-    endpoint = f"https://{os.environ['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com"
-    return subprocess.run(
-        ["aws", "s3", *args, "--endpoint-url", endpoint],
-        env=env,
-        capture_output=True,
-        text=True,
+    needed = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "CF_ACCOUNT_ID")
+    if not all(os.environ.get(k) for k in needed):
+        return None
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{os.environ['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        # R2 wants SigV4 and has no regions; "auto" is what it expects.
+        region_name="auto",
+        config=Config(signature_version="s3v4", retries={"max_attempts": 3}),
     )
 
 
 def restore_profile() -> bool:
     """Pull the profile out of R2. False means "no profile yet, log in first"."""
-    if not _r2_env():
+    s3 = _r2()
+    if s3 is None:
         log.warning("R2 not configured; the profile will not survive a restart")
         return os.path.isdir(PROFILE_DIR)
 
-    bucket = os.environ["R2_BUCKET"]
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         dest = tmp.name
-    res = _aws("cp", f"s3://{bucket}/{PROFILE_KEY}", dest)
-    if res.returncode != 0:
-        log.warning("no stored profile (%s)", res.stderr.strip()[:200])
+    try:
+        s3.download_file(os.environ["R2_BUCKET"], PROFILE_KEY, dest)
+    except Exception as e:  # noqa: BLE001 - a missing profile is expected, not fatal
+        log.warning("no stored profile (%s)", str(e)[:200])
+        os.unlink(dest)
         return False
 
     os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -108,19 +105,20 @@ def restore_profile() -> bool:
 
 def save_profile() -> None:
     """Push the profile back, so the next container resumes this session."""
-    if not _r2_env():
+    s3 = _r2()
+    if s3 is None:
         return
-    bucket = os.environ["R2_BUCKET"]
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         dest = tmp.name
-    with tarfile.open(dest, "w:gz") as tar:
-        tar.add(PROFILE_DIR, arcname=".")
-    res = _aws("cp", dest, f"s3://{bucket}/{PROFILE_KEY}")
-    os.unlink(dest)
-    if res.returncode == 0:
+    try:
+        with tarfile.open(dest, "w:gz") as tar:
+            tar.add(PROFILE_DIR, arcname=".")
+        s3.upload_file(dest, os.environ["R2_BUCKET"], PROFILE_KEY)
         log.info("profile saved to R2")
-    else:
-        log.error("could not save profile: %s", res.stderr.strip()[:200])
+    except Exception as e:  # noqa: BLE001
+        log.error("could not save profile: %s", str(e)[:200])
+    finally:
+        os.unlink(dest)
 
 
 async def push_cookies(psid: str, psidts: str) -> bool:

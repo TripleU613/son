@@ -3,3 +3,6 @@
 # Playwright refuses to launch with a version-mismatch error.
 playwright==1.62.0
 httpx==0.28.1
+# R2, over the S3 API. boto3 rather than the aws CLI: `awscli` has no
+# installation candidate on this image's Ubuntu base.
+boto3==1.42.11

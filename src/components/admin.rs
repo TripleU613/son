@@ -5,8 +5,27 @@ use crate::api::{
     admin_delete_son, admin_flagged_sons, admin_screening_status, admin_set_gemini_cookies,
     admin_set_public,
 };
+use crate::components::empty::{EmptyState, ErrorState};
 use crate::components::icon::{Ico, LuCheck, LuCircleAlert, LuRefreshCw};
 use crate::models::FlaggedSon;
+
+/// A destructive action, written out in full rather than as `btn-quiet` plus
+/// overrides.
+///
+/// This replaced `.btn-quiet` plus two important-flagged hover colours, where
+/// the flags were load-bearing: the primitive already sets a hover border and a
+/// hover text colour, so without them the two rules sat at equal specificity and
+/// the winner came down to their order in the generated stylesheet. That is the
+/// precise failure mode this project deleted its stylesheet to escape, and
+/// forcing it treats the symptom. Same geometry, its own hover colours, nothing
+/// to fight.
+///
+/// The old class names are deliberately not written out anywhere above: the
+/// Tailwind scanner reads these `.rs` files as plain text and does not skip
+/// comments, so quoting them verbatim kept emitting the very rules this removed.
+const BTN_DANGER: &str = "inline-flex min-h-9 items-center gap-2 rounded border border-line \
+     bg-transparent px-3 text-[0.85rem] text-ink-2 transition-colors hover:border-danger \
+     hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50";
 
 /// The report queue. Gated server-side in every server fn it calls
 /// (`api::require_admin`) — this component hiding itself from a non-admin is
@@ -25,29 +44,33 @@ pub fn Admin() -> impl IntoView {
     view! {
         <Title text="admin — son collection"/>
         <ScreeningPanel/>
-        <h1 class="m-0 mb-4 mt-8 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"report queue"</h1>
+        // Sentence case, like "Leaderboard" and "Search". This was the only
+        // page title on the site in lowercase.
+        <h1 class="m-0 mb-4 mt-8 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"Report queue"</h1>
 
         <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"loading queue…"</p> }>
             {move || {
                 flagged
                     .get()
                     .map(|res| match res {
-                        Err(e) => {
+                        // The shared states, not two more hand-rolled ones.
+                        // Besides the inconsistency, the old error branch
+                        // rendered `{e.to_string()}` straight into the page --
+                        // the exact thing `ErrorState` was written to stop, and
+                        // the raw server-fn wording is no more useful to an
+                        // admin than to anyone else. The real error is still
+                        // logged server-side.
+                        Err(_) => {
                             view! {
-                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
-                                    <h2>"Not available."</h2>
-                                    <p>{e.to_string()}</p>
-                                </section>
+                                <ErrorState
+                                    message="Could not load the queue."
+                                    retry_href="/admin"
+                                />
                             }
                                 .into_any()
                         }
                         Ok(rows) if rows.is_empty() => {
-                            view! {
-                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
-                                    <h2>"Queue is empty."</h2>
-                                    <p>"Nothing flagged right now."</p>
-                                </section>
-                            }
+                            view! { <EmptyState icon=LuCheck message="Nothing flagged right now."/> }
                                 .into_any()
                         }
                         Ok(rows) => {
@@ -104,12 +127,24 @@ fn AdminRow(
         <article class="flex flex-col gap-3.5 rounded-lg border border-line bg-surface p-3.5 sm:flex-row">
             <img class="h-[88px] w-[88px] flex-none rounded object-cover" src=son.thumb_url.clone() alt=""/>
             <div class="grid min-w-0 flex-1 gap-2">
-                <div class="flex items-center gap-2.5">
-                    <a href=format!("/son/{}", son.slug)>{son.title.clone()}</a>
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <a
+                        class="truncate font-medium transition-colors hover:text-accent"
+                        href=format!("/son/{}", son.slug)
+                    >
+                        {son.title.clone()}
+                    </a>
+                    // Tinted rather than filled, and in theme colours. The
+                    // filled version needed a hand-picked foreground for each
+                    // state -- a raw `#06301c` on the green and white on the
+                    // red -- which are the only two hardcoded hex values left
+                    // anywhere in the UI and match nothing in the palette. A
+                    // translucent fill lets `ok`/`danger` be both the text and
+                    // the background, so the badge stays in the system.
                     <span class=if son.is_public {
-                        "rounded-full bg-ok px-2 py-0.5 text-[0.72rem] text-[#06301c]"
+                        "flex-none rounded-full border border-ok/30 bg-ok/15 px-2 py-0.5 text-[0.72rem] font-medium text-ok"
                     } else {
-                        "rounded-full bg-danger px-2 py-0.5 text-[0.72rem] text-white"
+                        "flex-none rounded-full border border-danger/30 bg-danger/15 px-2 py-0.5 text-[0.72rem] font-medium text-danger"
                     }>
                         {if son.is_public { "visible" } else { "hidden" }}
                     </span>
@@ -144,7 +179,7 @@ fn AdminRow(
                         fallback=move || {
                             view! {
                                 <button
-                                    class="btn-quiet hover:!border-danger hover:!text-danger"
+                                    class=BTN_DANGER
                                     on:click=move |_| set_confirming_delete.set(true)
                                 >
                                     "delete"
@@ -153,7 +188,7 @@ fn AdminRow(
                         }
                     >
                         <button
-                            class="btn-quiet hover:!border-danger hover:!text-danger"
+                            class=BTN_DANGER
                             disabled=move || delete.pending().get()
                             on:click=move |_| {
                                 delete.dispatch(());
@@ -161,11 +196,37 @@ fn AdminRow(
                         >
                             "really delete? (no undo)"
                         </button>
-                        <button class="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:text-danger" on:click=move |_| set_confirming_delete.set(false)>
+                        // `btn-quiet`, like every other secondary control.
+                        // Cancel was a bare unstyled <button> -- no height, no
+                        // padding, no border -- sitting next to two real ones,
+                        // so the safe way out of a destructive confirmation was
+                        // the least clickable thing in the row.
+                        <button
+                            class="btn-quiet"
+                            on:click=move |_| set_confirming_delete.set(false)
+                        >
                             "cancel"
                         </button>
                     </Show>
                 </div>
+
+                // Failures used to be silent: both Actions dropped their Err
+                // on the floor, so a hide or a delete that the server refused
+                // looked exactly like one that worked -- the row simply stayed
+                // as it was. On an admin surface that is the difference between
+                // "already handled" and "still live".
+                {move || {
+                    let failed = toggle.value().get().is_some_and(|r| r.is_err())
+                        || delete.value().get().is_some_and(|r| r.is_err());
+                    failed
+                        .then(|| {
+                            view! {
+                                <p class="m-0 text-[0.8rem] text-danger" role="alert">
+                                    "That didn't go through. Try again."
+                                </p>
+                            }
+                        })
+                }}
             </div>
         </article>
     }

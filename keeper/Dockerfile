@@ -23,11 +23,9 @@
 # architecture itself.
 FROM mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d
 
-# awscli for the two R2 operations this does (fetch the profile, put it back).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends awscli \
-    && rm -rf /var/lib/apt/lists/*
-
+# No apt layer at all: R2 is reached with boto3 from requirements.txt, because
+# `awscli` has no installation candidate on this image's Ubuntu base and enabling
+# a repository to get it would be a worse trade than one pinned pip package.
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt

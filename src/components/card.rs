@@ -67,22 +67,34 @@ pub fn SonCard(son: Son) -> impl IntoView {
             // pointer-events-none so the gradient does not intercept clicks
             // meant for the link underneath; the tear button switches them back
             // on for itself alone.
-            <div class="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 rounded-b-lg bg-gradient-to-t from-black/90 via-black/60 to-transparent px-2.5 pb-2.5 pt-10 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-                <span class="min-w-0">
-                    <span class="block truncate text-[0.8125rem] font-semibold leading-snug text-ink">
-                        {title}
-                    </span>
-                    <span class="block truncate text-[0.6875rem] leading-normal text-ink-2">
-                        {byline}
-                    </span>
+            // The tear sits in the corner, not in the caption row.
+            //
+            // Sharing that row cost the title 55px of a 145px caption on a
+            // 375px phone, which put "sonion powder" back to "sonion pow…" --
+            // the same truncation this card was reshaped to fix. Up here it
+            // costs the title nothing, and a like control in the top corner of
+            // a tile is where galleries put it anyway.
+            //
+            // Plain `pointer-events-auto`, with no conditional: on a pointer
+            // device the button cannot be clicked without hovering the card
+            // first, which is exactly what reveals it, and on touch it is
+            // always visible. So there is no state in which it is invisible and
+            // still clickable.
+            <span class="pointer-events-auto absolute right-2 top-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+                <LikeButton
+                    id=son.id.clone()
+                    initial_count=son.likes
+                    initial_liked=son.liked_by_me
+                    small=true
+                />
+            </span>
+
+            <div class="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-lg bg-gradient-to-t from-black/90 via-black/60 to-transparent px-2.5 pb-2.5 pt-10 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+                <span class="block truncate text-[0.8125rem] font-semibold leading-snug text-ink">
+                    {title}
                 </span>
-                <span class="pointer-events-auto flex-none">
-                    <LikeButton
-                        id=son.id.clone()
-                        initial_count=son.likes
-                        initial_liked=son.liked_by_me
-                        small=true
-                    />
+                <span class="block truncate text-[0.6875rem] leading-normal text-ink-2">
+                    {byline}
                 </span>
             </div>
         </div>
