@@ -17,6 +17,14 @@ const DESCRIPTION: &str = "Every son, collected. Sonion. Capri-Son. Dy-Son. \
 Sonflower. If it has a son in it, it belongs here — a free, community-run \
 gallery of the son meme, open to anonymous uploads.";
 
+/// How many tiles load eagerly at full priority.
+///
+/// Eight, because that is the widest first row any density produces: compact
+/// tops out at `grid-cols-8` above 1900px. Anything past the first row is below
+/// the fold at every breakpoint and stays lazy -- the point is to stop the LCP
+/// tile queueing behind lazy siblings, not to defeat lazy loading.
+const EAGER_TILES: usize = 8;
+
 /// The gallery.
 ///
 /// The first page comes from a blocking `Resource` so it renders during SSR — a
@@ -168,13 +176,27 @@ pub fn Gallery() -> impl IntoView {
 
                             view! {
                                 <div class=move || density.get().grid_class()>
-                                    <For
-                                        each=move || page.sons.clone()
-                                        key=|s| s.id.clone()
-                                        let:son
-                                    >
-                                        <SonCard son=son/>
-                                    </For>
+                                    // `.enumerate()` rather than <For>, purely
+                                    // so the opening row can be told it is the
+                                    // opening row. This first page is a
+                                    // snapshot of a resolved Resource and the
+                                    // whole branch re-renders when the sort
+                                    // changes, so there is no keyed
+                                    // reconciliation being given up here.
+                                    //
+                                    // `extra` keeps <For>: it grows a page at a
+                                    // time and must not re-render what is
+                                    // already on screen -- and everything in it
+                                    // is below the fold by definition, so none
+                                    // of it is ever priority.
+                                    {page
+                                        .sons
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(i, son)| {
+                                            view! { <SonCard son=son priority=i < EAGER_TILES/> }
+                                        })
+                                        .collect_view()}
                                     <For each=move || extra.get() key=|s| s.id.clone() let:son>
                                         <SonCard son=son/>
                                     </For>

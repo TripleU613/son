@@ -1,10 +1,27 @@
-//! A near-invisible sentinel placed just before a "load more" button. Once
-//! it scrolls into view, `on_visible` fires -- most visitors never need to
-//! click the button at all, but it stays for anyone who'd rather not have
-//! the page load more without asking (or whose browser can't run the
-//! observer for some reason).
+//! A near-invisible sentinel placed after the grid. Once it comes within
+//! `PREFETCH_MARGIN` of the viewport, `on_visible` fires and the next page is
+//! fetched. There is no longer a button beside it -- the sentinel is the whole
+//! mechanism.
+//!
+//! The margin is the part that matters. With the observer's default options the
+//! sentinel only counts as visible once it is genuinely on screen, so a visitor
+//! scrolls to the bottom of the grid and *then* waits out a round trip, once per
+//! page, forever. Firing a screenful early means the next page has usually
+//! already landed by the time they reach it.
 
 use leptos::prelude::*;
+
+/// How far below the viewport the sentinel starts pulling the next page.
+///
+/// Roughly one tall phone screen. Enough for a fetch to finish at ordinary
+/// scroll speed, and not so far ahead that someone who stops scrolling has
+/// dragged down pages they will never look at -- which at 10k sons is the
+/// difference between a few hundred KB of thumbnails and a few MB.
+///
+/// Hydrate-only, like the observer it configures: the server never scrolls, and
+/// an ungated const is dead code in the ssr build.
+#[cfg(feature = "hydrate")]
+const PREFETCH_MARGIN: &str = "800px 0px";
 
 #[component]
 pub fn ScrollSentinel(on_visible: impl Fn() + Clone + 'static) -> impl IntoView {
@@ -37,7 +54,13 @@ pub fn ScrollSentinel(on_visible: impl Fn() + Clone + 'static) -> impl IntoView 
                     }
                 });
 
-            match web_sys::IntersectionObserver::new(closure.as_ref().unchecked_ref()) {
+            let opts = web_sys::IntersectionObserverInit::new();
+            opts.set_root_margin(PREFETCH_MARGIN);
+
+            match web_sys::IntersectionObserver::new_with_options(
+                closure.as_ref().unchecked_ref(),
+                &opts,
+            ) {
                 Ok(observer) => {
                     observer.observe(&el);
                     // The browser's own reference to the observer keeps it

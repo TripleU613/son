@@ -5,7 +5,18 @@ use crate::components::like::LikeButton;
 use crate::models::Son;
 
 #[component]
-pub fn SonCard(son: Son) -> impl IntoView {
+pub fn SonCard(
+    son: Son,
+    /// Set on the handful of tiles that are above the fold on first paint.
+    ///
+    /// `loading="lazy"` on every image sounds strictly better and is not: the
+    /// browser deprioritises lazy images, so the one that decides this page's
+    /// LCP -- a tile in the first row -- queues behind work it should have led.
+    /// The gallery marks its opening row and nothing else; everything below is
+    /// lazy, which at 10k sons is the only reason the grid is affordable at all.
+    #[prop(default = false)]
+    priority: bool,
+) -> impl IntoView {
     let href = format!("/son/{}", son.slug);
     // One binding per use. The title is needed three times -- as the link's
     // accessible name, as the image's alt text, and as the visible caption --
@@ -34,7 +45,15 @@ pub fn SonCard(son: Son) -> impl IntoView {
         // bottom of every tile, and twelve of them in a grid read as a table of
         // labels rather than a wall of sons. The text now sits over the image,
         // where it costs no layout at all.
-        <div class="card group relative aspect-square has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
+        // `content-visibility:auto` is what makes a very long grid affordable.
+        // It lets the browser skip layout, style and paint for every tile that
+        // is off screen, and pick the work back up as one scrolls in -- so the
+        // cost of a 10,000-son grid tracks what is on screen rather than what
+        // has been loaded. It needs no intrinsic-size hint here because
+        // `aspect-square` already fixes the box's height from its grid-assigned
+        // width, so a skipped tile still reserves exactly the right space and
+        // the scrollbar does not jump.
+        <div class="card group relative aspect-square [content-visibility:auto] has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
             // The anchor covers the whole tile. `aria-label` carries the title,
             // because the link's only content is an image and the caption that
             // names it lives outside the anchor.
@@ -46,7 +65,8 @@ pub fn SonCard(son: Son) -> impl IntoView {
                 <img
                     src=son.thumb_url.clone()
                     alt=alt_text
-                    loading="lazy"
+                    loading=if priority { "eager" } else { "lazy" }
+                    fetchpriority=if priority { "high" } else { "auto" }
                     decoding="async"
                     class="absolute inset-0 block h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.03]"
                 />

@@ -4,11 +4,37 @@ Keeps a logged-in Gemini browser session alive so screening stops dying, and
 pushes the current cookies to the sidecar whenever they rotate.
 
 **Nothing here logs in.** It drives a browser profile that is *already* signed in.
-Producing that profile is a one-time human step:
+Producing that profile is a one-time human step, and there are two ways to do it.
+
+## Option A: sign in through the keeper itself (no local setup)
+
+The container can run its own Chromium with a display and export it to your
+browser, so the sign-in happens in the real profile with nothing to copy
+afterwards.
 
 ```bash
-# On any machine with a display. Chromium opens; sign in to the burner Google
-# account, open gemini.google.com, then close the window.
+gh variable set KEEPER_LOGIN_MODE --body 1     # then let CI redeploy
+```
+
+Open **http://bulky-server:6080/vnc.html** over Tailscale — the port is bound to
+the tailnet interface, not `0.0.0.0`, so it is not reachable from anywhere else.
+Sign in to Google in that window. The keeper saves the profile to R2 as soon as the
+session appears, and hands the cookies straight to the sidecar, so screening starts
+working immediately.
+
+Then turn it off, so a browser holding a live session is not sitting there:
+
+```bash
+gh variable set KEEPER_LOGIN_MODE --body 0     # redeploy back to headless
+```
+
+The window closes itself after `KEEPER_LOGIN_MINUTES` (default 20) regardless.
+
+## Option B: produce the profile locally
+
+```bash
+# On any machine with a display. Chromium opens; sign in to the Google account,
+# open gemini.google.com, then close the window.
 pip install playwright==1.62.0 && playwright install chromium
 python - <<'PY'
 from playwright.sync_api import sync_playwright

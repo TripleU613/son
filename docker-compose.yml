@@ -132,9 +132,17 @@ services:
     shm_size: 256m
     tmpfs:
       - /tmp:exec,size=700m
+    # Login mode only, and bound to the Tailscale interface rather than 0.0.0.0:
+    # this is a browser holding a live Google session, so it is reachable from the
+    # tailnet and nowhere else. Normal operation starts nothing on this port.
+    ports:
+      - "${KEEPER_LOGIN_BIND:-100.88.11.83}:6080:6080"
     environment:
       SIDECAR_URL: http://gemini:8099
       SIDECAR_KEY: ${SIDECAR_KEY:-}
+      # 1 turns the container into a one-time sign-in window instead of the
+      # headless refresher. Set it, redeploy, sign in, unset it.
+      KEEPER_LOGIN_MODE: ${KEEPER_LOGIN_MODE:-0}
       # R2 is where the browser profile lives, so a restart resumes the same
       # session rather than needing a fresh login -- and "no storage on the
       # server" stays true.

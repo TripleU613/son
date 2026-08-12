@@ -48,6 +48,11 @@ SIDECAR_KEY = os.environ.get("SIDECAR_KEY", "")
 # never more than one cycle stale.
 REFRESH_SECONDS = int(os.environ.get("KEEPER_REFRESH_SECONDS", "600"))
 
+# Login mode: run the browser with a display instead of headless, so a human can
+# sign in through it over the tailnet. See `login_mode()`.
+LOGIN_MODE = os.environ.get("KEEPER_LOGIN_MODE") == "1"
+LOGIN_MINUTES = int(os.environ.get("KEEPER_LOGIN_MINUTES", "20"))
+
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
 
@@ -208,6 +213,65 @@ async def run() -> None:
             await asyncio.sleep(REFRESH_SECONDS)
 
 
+async def login_mode() -> None:
+    """Hold a visible browser open so a human can sign in, then save the profile.
+
+    This is the one step nothing here can do on its own: Google mints the session,
+    and only in response to a real login. Rather than asking for a password -- which
+    this codebase will not handle -- or for a DevTools cookie hunt, the keeper's own
+    Chromium runs with a display and is reachable over the tailnet. Sign in, and the
+    profile it was already going to use is saved to R2.
+
+    Starts from any existing profile, so this doubles as "re-authenticate the one I
+    have" rather than only ever starting from scratch.
+
+    Bounded by KEEPER_LOGIN_MINUTES: an interactive browser holding a live session
+    should not stay open indefinitely because someone forgot to switch the mode off.
+    It saves whatever it has when the window closes or the time runs out.
+    """
+    restore_profile()
+    log.info(
+        "login mode: open the VNC page, sign in to Google, then close the window "
+        "or wait. Saving to r2://%s. Window: %d minutes.",
+        PROFILE_KEY,
+        LOGIN_MINUTES,
+    )
+
+    async with async_playwright() as pw:
+        ctx = await pw.chromium.launch_persistent_context(
+            PROFILE_DIR,
+            headless=False,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--start-maximized"],
+        )
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
+
+        deadline = asyncio.get_running_loop().time() + LOGIN_MINUTES * 60
+        signed_in = False
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(10)
+            try:
+                jar = {c["name"] for c in await ctx.cookies()}
+            except Exception:  # noqa: BLE001 - the window was closed
+                break
+            if all(n in jar for n in WANTED):
+                if not signed_in:
+                    log.info("signed in; saving the profile")
+                    signed_in = True
+                # Saved on every pass while signed in, so closing the window at any
+                # point leaves a good copy in R2 rather than only saving at the end.
+                save_profile()
+                jar_full = {c["name"]: c["value"] for c in await ctx.cookies()}
+                await push_cookies(jar_full["__Secure-1PSID"], jar_full["__Secure-1PSIDTS"])
+
+        if not signed_in:
+            log.error("login window closed without a signed-in session; nothing saved")
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 if __name__ == "__main__":
     if os.environ.get("LOGIN_CHECK_ONLY"):
         # Verify a profile before trusting it in production: restores, loads the
@@ -227,6 +291,8 @@ if __name__ == "__main__":
                 await ctx.close()
 
         asyncio.run(check())
+    elif LOGIN_MODE:
+        asyncio.run(login_mode())
     else:
         try:
             asyncio.run(run())
