@@ -198,6 +198,10 @@ pub async fn list_public(
 }
 
 /// Fill in `liked_by_me` for a page in one query rather than one per card.
+///
+/// `voter` is a signed-in user's id. The column is still called `voter_id` and
+/// still holds anonymous ids from before likes required an account (see
+/// `toggle_like`), so the name stays; what changed is who can be one.
 async fn mark_liked(sons: &mut [Son], voter: Option<&str>) -> anyhow::Result<()> {
     let Some(voter) = voter else { return Ok(()) };
     if sons.is_empty() {
@@ -264,6 +268,62 @@ pub async fn get(slug_or_id: &str, voter: Option<&str>) -> anyhow::Result<Option
         son.liked_by_me = !hit.is_empty();
     }
     Ok(Some(son))
+}
+
+/// The sons either side of this one in the gallery's default order, as
+/// `(newer, older)`.
+///
+/// Slugs, never ids: every link in the UI is built from a slug, and returning an
+/// id here would quietly produce the one URL shape nothing should be indexing.
+/// `COALESCE` because `sons.slug` is nullable (migration 0008) — the same
+/// id-as-fallback `Son::from` and `sitemap_sons` already apply, so a row written
+/// before slugs existed yields a working link instead of a missing neighbour.
+///
+/// The ordering *and* the tiebreak are `list_public(Sort::Newest)`'s exactly —
+/// `created_at DESC, id DESC` — so stepping between detail pages walks the same
+/// sequence as the grid the visitor arrived from. Dropping the `id` tiebreak
+/// would look identical until two sons shared a `created_at`, and then it would
+/// skip one, in one direction only.
+///
+/// One round trip: the anchor row is a CTE that both scalar subqueries join
+/// against. Checked against live D1 before being relied on, per CLAUDE.md — a
+/// CTE referenced from inside a scalar subquery does work there, and an unknown
+/// or hidden slug produces an empty `anchor` and therefore one row of two NULLs
+/// rather than an error, which is the right answer: a son that is not in the
+/// gallery has nothing either side of it.
+pub async fn neighbours(slug_or_id: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
+    #[derive(Deserialize)]
+    struct NeighbourRow {
+        newer: Option<String>,
+        older: Option<String>,
+    }
+
+    let rows: Vec<NeighbourRow> = client()
+        .query(
+            "WITH anchor AS ( \
+                 SELECT created_at, id FROM sons \
+                 WHERE (slug = ?1 OR id = ?1) AND is_public = 1 LIMIT 1 \
+             ) \
+             SELECT \
+                 (SELECT COALESCE(sons.slug, sons.id) FROM sons, anchor \
+                  WHERE sons.is_public = 1 \
+                    AND (sons.created_at > anchor.created_at \
+                         OR (sons.created_at = anchor.created_at AND sons.id > anchor.id)) \
+                  ORDER BY sons.created_at ASC, sons.id ASC LIMIT 1) AS newer, \
+                 (SELECT COALESCE(sons.slug, sons.id) FROM sons, anchor \
+                  WHERE sons.is_public = 1 \
+                    AND (sons.created_at < anchor.created_at \
+                         OR (sons.created_at = anchor.created_at AND sons.id < anchor.id)) \
+                  ORDER BY sons.created_at DESC, sons.id DESC LIMIT 1) AS older",
+            vec![json!(slug_or_id)],
+        )
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|r| (r.newer, r.older))
+        .unwrap_or((None, None)))
 }
 
 /// A slug for `title` that nothing else is using.
@@ -394,7 +454,9 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
 ///
 /// One report per voter per son (`reports`'s primary key): a repeat report
 /// from the same voter is silently a no-op, so a single visitor cannot force
-/// auto-hide alone by resubmitting.
+/// auto-hide alone by resubmitting. `voter` is a signed-in user's id, which is
+/// what makes that key mean anything — while it was a self-issued cookie, three
+/// clears of `son_voter` were three distinct voters and the key bought nothing.
 pub async fn report(
     son_id: &str,
     voter: &str,
@@ -534,6 +596,13 @@ pub async fn count_public() -> anyhow::Result<i64> {
 }
 
 /// Toggle a like and return `(new_count, liked_now)`.
+///
+/// `voter` is a signed-in user's id — `api::like_son` refuses to call this
+/// without one. The column keeps its name because it keeps its old contents:
+/// likes recorded against anonymous `son_voter` cookie ids are still here and
+/// still counted, since step 3 below recomputes from `COUNT(*)` and never
+/// increments. Nothing about this migration moves a total; the only thing those
+/// rows have lost is an owner who could un-like them.
 ///
 /// D1 gives no transaction spanning separate HTTP calls (see `d1.rs`), so this
 /// cannot be "read whether liked, then branch" the way a local sqlx
