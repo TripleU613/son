@@ -221,13 +221,19 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
     let title = clean_title(&title);
 
     step!(Step::Storing);
-    let stored = match crate::storage::store(
-        &img,
-        &title,
-        uploader.as_ref().map(|u| u.display_name.as_str()),
-    )
-    .await
-    {
+    // First name only. This one is not a display string -- it becomes the
+    // `Author` PNG text chunk in BOTH the original and the thumbnail, and both
+    // are served straight from R2, so the full name was readable by anyone who
+    // downloaded a son even on the pages that never showed it. Only affects
+    // uploads from here on; PNGs already in R2 keep the name baked into them.
+    //
+    // Bound to a local rather than passed inline: `store` takes an `Option<&str>`
+    // and a `String` built in the argument list would be dropped at the end of
+    // that expression, borrowed by a call that has not finished awaiting.
+    let uploader_credit = uploader
+        .as_ref()
+        .map(|u| crate::db::public_first_name(&u.display_name));
+    let stored = match crate::storage::store(&img, &title, uploader_credit.as_deref()).await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("store failed: {e}");
@@ -249,8 +255,14 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
         height: stored.height,
         content_hash: &content_hash,
         uploader_id: uploader.as_ref().map(|u| u.id.as_str()),
+        // The son handed straight back to the browser that just uploaded it,
+        // built in memory rather than re-read through `SonRow`, so it misses the
+        // redaction that conversion applies. Without this the uploader's own new
+        // card showed their full name until the next refetch replaced it with
+        // the first -- a flicker that would read as a bug in whichever one a
+        // person happened to believe.
         uploader: uploader.as_ref().map(|u| crate::models::Uploader {
-            display_name: u.display_name.clone(),
+            display_name: crate::db::public_first_name(&u.display_name),
             avatar_url: u.avatar_url.clone(),
         }),
     })

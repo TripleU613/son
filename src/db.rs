@@ -30,6 +30,35 @@ pub fn client() -> &'static D1 {
     D1_CLIENT.get().expect("D1 client not initialized")
 }
 
+/// The part of a Google display name that is safe to publish: the first word.
+///
+/// Google hands back a full "Given Family" name and, until now, the whole of it
+/// went out on every card, every detail byline, the leaderboard, the public
+/// `/api/v1/sons` payload, the oEmbed `author_name`, and -- worst, because
+/// search engines keep it -- the `og:description` and the schema.org `creator`
+/// of every son that person ever uploaded. Contributing a meme should not
+/// publish somebody's surname.
+///
+/// Redacted HERE, where a database row becomes a `Son` or a `LeaderboardEntry`,
+/// rather than in each component that renders one. Same reasoning as `Uploader`
+/// carrying no email and no Google subject id: a value that never enters the
+/// struct cannot leak through a server function response later, and there is no
+/// list of render sites to keep in sync. `users.display_name` still holds the
+/// full name, which is what the signed-in visitor's own account menu reads.
+///
+/// Splitting on whitespace is a heuristic and a deliberately timid one. A
+/// mononym, or any name the person chose to write without a space, comes back
+/// unchanged -- so the failure mode is "published a whole name that was already
+/// one word", never "published nothing". An all-whitespace name is returned as
+/// it was for the same reason: it rendered as an empty byline before this
+/// function existed and still does, rather than this silently inventing a name.
+pub(crate) fn public_first_name(display_name: &str) -> String {
+    match display_name.split_whitespace().next() {
+        Some(first) => first.to_string(),
+        None => display_name.to_string(),
+    }
+}
+
 // A LEFT JOIN against users, not a separate per-row query: this is the hot
 // path (every gallery page, every detail view), and joining costs nothing D1
 // doesn't already pay for a single indexed lookup.
@@ -77,8 +106,12 @@ impl From<SonRow> for Son {
             // Both depend on who is asking / a follow-up query; filled in by
             // the caller (mark_liked).
             liked_by_me: false,
+            // Every read path in the app funnels through this conversion, so
+            // redacting here covers the gallery, the detail page, search,
+            // `MoreSons`, the public JSON API and the oEmbed response in one
+            // place.
             uploader: r.uploader_name.map(|display_name| Uploader {
-                display_name,
+                display_name: public_first_name(&display_name),
                 avatar_url: r.uploader_avatar,
             }),
         }
@@ -787,8 +820,13 @@ pub async fn leaderboard(limit: i64) -> anyhow::Result<Vec<LeaderboardEntry>> {
 
     Ok(rows
         .into_iter()
+        // Redacted too, for the same reason and because leaving it out here
+        // would undo the rest: /leaderboard lists exactly the people who upload
+        // while signed in, so a full name here is trivially matched back to the
+        // first-name-only byline on their sons. Ordering still uses the full
+        // name from SQL, so the sort is unchanged.
         .map(|r| LeaderboardEntry {
-            display_name: r.display_name,
+            display_name: public_first_name(&r.display_name),
             avatar_url: r.avatar_url,
             upload_count: r.upload_count,
         })
@@ -1023,6 +1061,27 @@ pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_first_name_is_published() {
+        assert_eq!(public_first_name("Usher Weiss"), "Usher");
+        assert_eq!(public_first_name("Mary Jane Watson"), "Mary");
+        // Hyphenated given names are one word and survive whole.
+        assert_eq!(public_first_name("Mary-Jane Watson"), "Mary-Jane");
+        // Google pads and double-spaces more often than you would hope.
+        assert_eq!(public_first_name("  Usher   Weiss  "), "Usher");
+    }
+
+    /// Never returns less than it was given when there is no surname to drop.
+    /// A mononym is the whole name, and an empty name has to stay empty rather
+    /// than have one invented for it.
+    #[test]
+    fn names_with_nothing_to_redact_are_untouched() {
+        assert_eq!(public_first_name("Madonna"), "Madonna");
+        assert_eq!(public_first_name("さくら"), "さくら");
+        assert_eq!(public_first_name(""), "");
+        assert_eq!(public_first_name("   "), "   ");
+    }
 
     #[test]
     fn slugs_are_url_safe() {
