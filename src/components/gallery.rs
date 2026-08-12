@@ -9,7 +9,7 @@ use crate::components::empty::EmptyState;
 use crate::components::icon::LuImage;
 use crate::components::infinite_scroll::ScrollSentinel;
 use crate::components::more_sons::MoreSons;
-use crate::components::sort_chips::{use_sort, GalleryView, SortChips, SortCtx};
+use crate::components::sort_chips::{use_sort, GalleryView, SortCtx, SortMenu};
 use crate::models::{Son, Sort};
 use crate::seo::absolute;
 
@@ -132,18 +132,23 @@ pub fn Gallery() -> impl IntoView {
         // No hero. The gallery is the product, so content starts at the top of
         // the page; the title/tagline/marketing copy the old layout opened with
         // is gone rather than reworded.
-        // Tabs and the view-mode toggle share one row: tabs left, modes right.
-        // The son-of-the-day banner that used to sit above this is now the last
-        // tab instead of a full-width card competing with the grid.
-        // The tab strip scrolls sideways when it does not fit (it stops fitting
-        // around 360px). Bled out to the viewport edges with matching inner
-        // padding so a half-scrolled chip is cut off by the edge of the screen,
-        // which reads as "there is more this way"; clipped at the content
-        // gutter instead, the same chip just looks broken. Cancelled at the
-        // breakpoint where the density toggle joins the row and the strip stops
-        // owning the full width.
+        // Sort and the view-mode toggle share one row: sort left, modes right.
+        // The son-of-the-day banner that used to sit above this is an option in
+        // the sort menu instead of a full-width card competing with the grid.
+        //
+        // One control, not a strip. The four views used to be four pills that
+        // were on screen at all times, which at 320-360px meant a row that had
+        // to scroll sideways directly under a 56px bar -- two bands of chrome
+        // above the fold before a single son. Collapsed, the same four choices
+        // cost one pill, so the row no longer needs to bleed to the viewport
+        // edges to make a half-scrolled option look intentional.
+        //
+        // Nothing here may gain `overflow-x` or `overflow-hidden`: the sort
+        // menu's panel is absolutely positioned out of this row, and a scroll
+        // container would clip it. The density toggle brings its own `ml-auto`,
+        // so it stays pinned right whatever the selected label's width.
         <div class="flex min-w-0 items-center gap-3 pb-3 min-[700px]:pb-4">
-            <SortChips class="flex-1 -mx-4 px-4 min-[700px]:mx-0 min-[700px]:px-0"/>
+            <SortMenu/>
             <DensityToggle density=density set_density=set_density/>
         </div>
 
@@ -152,7 +157,12 @@ pub fn Gallery() -> impl IntoView {
         </Show>
 
         <Show when=move || !son_of_day_view.get() fallback=|| ()>
-        <Suspense fallback=|| view! { <GridSkeleton/> }>
+        // Same constant as the eager first row below, rather than two
+        // independent 8s that agree by luck: the placeholder and the row it is
+        // standing in for are the same tiles. And the same density, so changing
+        // sort in compact mode does not draw a cozy-shaped placeholder that
+        // reflows the instant the cards land.
+        <Suspense fallback=move || view! { <GridSkeleton count=EAGER_TILES density=density.get()/> }>
             {move || {
                 first
                     .get()

@@ -5,7 +5,7 @@ use leptos_router::hooks::use_query_map;
 
 use crate::api::search_sons;
 use crate::components::card::SonCard;
-use crate::components::density::GridSkeleton;
+use crate::components::density::SearchSkeleton;
 use crate::components::empty::{EmptyState, ErrorState};
 use crate::components::icon::LuSearch;
 
@@ -37,14 +37,26 @@ pub fn SearchPage() -> impl IntoView {
         // crawler reach every son a result links to.
         <Meta name="robots" content="noindex, follow"/>
 
+        // The echoed query is the one word on this page that is the visitor's
+        // own, so it is the one that gets the accent. A free yellow moment that
+        // costs no extra copy, in the only place a query echo belongs.
         <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">
             {move || {
                 let q = q();
-                if q.is_empty() { "Search".to_string() } else { format!("\u{201C}{q}\u{201D}") }
+                if q.is_empty() {
+                    view! { "Search" }.into_any()
+                } else {
+                    view! {
+                        "\u{201C}"<span class="text-accent">{q}</span>"\u{201D}"
+                    }
+                        .into_any()
+                }
             }}
         </h1>
 
-        <Suspense fallback=|| view! { <GridSkeleton count=4/> }>
+        // 8, not 4: a half-height placeholder grid reads as a page that has
+        // finished loading and found four things, then jumps when it hasn't.
+        <Suspense fallback=|| view! { <SearchSkeleton/> }>
             {move || {
                 results
                     .get()
@@ -65,7 +77,12 @@ pub fn SearchPage() -> impl IntoView {
                         }
                         Ok(sons) => {
                             view! {
-                                <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+                                // Opacity only, never a transform: animating
+                                // the grid wrapper's transform promotes it to
+                                // its own layer and can force paint of the very
+                                // subtrees the tiles' `content-visibility:auto`
+                                // is there to skip.
+                                <div class="grid animate-fade-in grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
                                     <For each=move || sons.clone() key=|s| s.id.clone() let:son>
                                         <SonCard son=son/>
                                     </For>

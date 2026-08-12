@@ -15,7 +15,10 @@ set -euo pipefail
 export DISPLAY=:99
 
 # -nolisten tcp: the X server is for this container only, never the network.
-Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
+# 1280x800x24: enough room for Google's sign-in dialogs, and a smaller framebuffer
+# than 1440x900. 24-bit rather than 16 because noVNC's colour handling at 16bpp
+# makes text noticeably worse for no meaningful saving.
+Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
 # Wait for the socket rather than sleeping a guessed number of seconds.
 for _ in $(seq 1 50); do
   [ -e /tmp/.X11-unix/X99 ] && break

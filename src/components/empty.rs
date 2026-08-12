@@ -31,8 +31,16 @@ pub fn EmptyState(
     };
 
     view! {
-        <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
-            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-line bg-surface p-3 text-ink-3">
+        // The badge is a faint accent wash behind a muted-accent glyph. These
+        // two components are the site's most-seen zero-states, and this turns
+        // both of them warm without adding a single word to a page whose whole
+        // design constraint is that it has no words to spare.
+        //
+        // `h-13 w-13` resolves now: it is a `spacing` entry in the config. It
+        // used to emit nothing at all and the badge was sized by its padding
+        // and glyph by accident.
+        <section class="flex min-h-[46vh] animate-rise-in flex-col items-center justify-center gap-3 text-center">
+            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-accent-line bg-accent-veil p-3 text-accent-muted">
                 <Ico icon=icon size=28/>
             </span>
             <p class="m-0 text-base font-semibold text-ink">{message}</p>
@@ -56,8 +64,8 @@ pub fn ErrorState(
 ) -> impl IntoView {
     let href = retry_href.unwrap_or_else(|| "/".to_string());
     view! {
-        <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
-            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-line bg-surface p-3 text-ink-3">
+        <section class="flex min-h-[46vh] animate-rise-in flex-col items-center justify-center gap-3 text-center">
+            <span class="inline-flex h-13 w-13 items-center justify-center rounded-lg border border-accent-line bg-accent-veil p-3 text-accent-muted">
                 <Ico icon=LuCircleAlert size=28/>
             </span>
             <p class="m-0 text-base font-semibold text-ink">{message}</p>

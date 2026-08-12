@@ -6,6 +6,19 @@
 //! is gone: `storage::square` crops every upload to a square, so the ragged
 //! columns had nothing left to be ragged about and this is now the same grid the
 //! gallery uses.
+//!
+//! The section is deliberately unlabelled. Its visible heading was a second
+//! page title competing with the son's own `<h1>` for no information: "More
+//! sons" says nothing the grid of sons underneath it does not already say. Its
+//! accessible name now lives in the `<section>`'s `aria-label`, which is also
+//! what promotes it to a named landmark — so do not re-add a heading to fix
+//! "this section has no title", and do not drop the `aria-label` either, or
+//! this becomes a nameless run of two dozen links with no announced boundary.
+//! The top rule is the only remaining signal that a new section starts, so it
+//! stays too.
+//!
+//! Two call sites, so all of that lands in both places: the detail page, and
+//! the gallery's son-of-the-day tab (`gallery.rs`, `SonOfTheDay`).
 
 use leptos::prelude::*;
 
@@ -40,16 +53,17 @@ pub fn MoreSons(
                         (!sons.is_empty())
                             .then(|| {
                                 view! {
-                                    <section class="mt-4 border-t border-line pt-5 lg:mt-6 lg:pt-6">
-                                        // A section label, not a heading that
-                                        // competes with the son's own <h1>: at
-                                        // text-base semibold it read as a
-                                        // second page title. Smaller, tracked
-                                        // out and dimmed, it announces the
-                                        // section without claiming the page.
-                                        <h2 class="m-0 mb-4 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
-                                            "More sons"
-                                        </h2>
+                                    // pt raised from 5 to 6 with the heading
+                                    // gone: the rule kept 32px of air above it
+                                    // and, once the label stopped occupying the
+                                    // 33px below it, only 20px underneath, so it
+                                    // read as belonging to the section it
+                                    // separates from rather than the one it
+                                    // introduces.
+                                    <section
+                                        class="mt-4 border-t border-line pt-6 lg:mt-6"
+                                        aria-label="More sons"
+                                    >
                                         <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                             <For
                                                 each=move || sons.clone()

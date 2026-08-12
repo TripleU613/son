@@ -48,6 +48,30 @@ SIDECAR_KEY = os.environ.get("SIDECAR_KEY", "")
 # never more than one cycle stale.
 REFRESH_SECONDS = int(os.environ.get("KEEPER_REFRESH_SECONDS", "600"))
 
+# While not signed in, cycle much faster. Two reasons: the Gemini page needs to be
+# on screen for someone to sign in through, and once they do, the new session
+# should be picked up in seconds rather than after a ten-minute wait.
+IDLE_REFRESH_SECONDS = int(os.environ.get("KEEPER_IDLE_REFRESH_SECONDS", "45"))
+
+# Chromium flags chosen for footprint. Measured in production at 1.07GB of a
+# 1.17GB limit with the Gemini SPA resident -- 91%, which a sign-in page load would
+# have pushed into an OOM kill mid-flow. There is no GPU in the container, so the
+# GPU process and the software rasteriser behind it are pure overhead, and a
+# renderer cap plus a smaller JS heap keeps one page from growing without bound.
+CHROME_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--start-maximized",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--renderer-process-limit=2",
+    "--js-flags=--max-old-space-size=192",
+    "--disable-extensions",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-features=TranslateUI",
+]
+
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
 
@@ -147,6 +171,7 @@ async def _cycle(ctx, page, last: tuple[str, str] | None) -> tuple[str, str] | N
     await page.wait_for_timeout(4_000)
 
     jar = {c["name"]: c["value"] for c in await ctx.cookies()}
+    signed_in_now = all(n in jar for n in WANTED)
     missing = [n for n in WANTED if n not in jar]
     if missing:
         # Signed out: the profile is no longer authenticated and only a human can
@@ -168,6 +193,22 @@ async def _cycle(ctx, page, last: tuple[str, str] | None) -> tuple[str, str] | N
         save_profile()
         return pair
     return last
+
+
+async def _park(page) -> None:
+    """Unload the Gemini page between cycles.
+
+    The SPA is most of the browser's footprint, and it only needs to be resident
+    for the seconds it takes to refresh the cookie. Parking on about:blank gives
+    that memory back and costs one extra navigation per cycle.
+
+    Only done once signed in: while a human still has to sign in, the page needs to
+    be on screen for them to do it through.
+    """
+    try:
+        await page.goto("about:blank", wait_until="domcontentloaded", timeout=15_000)
+    except Exception as e:  # noqa: BLE001 - parking is an optimisation, never fatal
+        log.debug("could not park the page: %s", e)
 
 
 async def run() -> None:
@@ -193,7 +234,7 @@ async def run() -> None:
         ctx = await pw.chromium.launch_persistent_context(
             PROFILE_DIR,
             headless=False,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--start-maximized"],
+            args=CHROME_ARGS,
             viewport=None,
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
@@ -211,12 +252,21 @@ async def run() -> None:
                         "not signed in. Open /admin/browser on the site and sign in "
                         "to Google in that window; this will pick it up within %d "
                         "seconds.",
-                        REFRESH_SECONDS,
+                        IDLE_REFRESH_SECONDS,
                     )
                     announced = True
             except Exception as e:  # noqa: BLE001 - a bad cycle must not kill the loop
                 log.error("refresh cycle failed: %s", e)
-            await asyncio.sleep(REFRESH_SECONDS)
+
+            if last is not None:
+                # Signed in: give the page's memory back and settle into the slow
+                # cadence.
+                await _park(page)
+                await asyncio.sleep(REFRESH_SECONDS)
+            else:
+                # Still waiting on a human: leave Gemini on screen for them and
+                # come back quickly so their sign-in is noticed straight away.
+                await asyncio.sleep(IDLE_REFRESH_SECONDS)
 
 
 if __name__ == "__main__":

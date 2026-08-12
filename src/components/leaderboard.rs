@@ -3,9 +3,41 @@ use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 
 use crate::api::leaderboard;
+use crate::components::density::{stagger, RowSkeleton};
 use crate::components::empty::{EmptyState, ErrorState};
 use crate::components::icon::LuTrophy;
 use crate::seo::absolute;
+
+/// The rank number's colour, as three whole class strings.
+///
+/// A podium rather than a single winner: first place in the full accent, second
+/// and third in the muted one, everyone else quiet. The middle arm is the point
+/// of the change -- with two arms, ranks 2 and 3 were styled identically to
+/// rank 40, so the top of the list had no shape to it.
+///
+/// Whole strings, not a toggled utility, because the Tailwind scanner reads
+/// these `.rs` sources literally.
+fn rank_class(rank: usize) -> &'static str {
+    match rank {
+        1 => "w-5 flex-none text-right text-[0.8125rem] font-semibold tabular-nums text-accent",
+        2 | 3 => {
+            "w-5 flex-none text-right text-[0.8125rem] font-semibold tabular-nums text-accent-muted"
+        }
+        _ => "w-5 flex-none text-right text-[0.8125rem] tabular-nums text-ink-3",
+    }
+}
+
+/// The row's own surface. First place gets a faint accent wash and hairline so
+/// the top of the list is a warm band instead of one more grey row; the colour
+/// is never the only signal, since the rank number and its weight already say
+/// the same thing.
+fn row_class(rank: usize) -> &'static str {
+    if rank == 1 {
+        "flex items-center gap-3 rounded border border-accent-line bg-accent-veil px-3.5 py-2.5"
+    } else {
+        "flex items-center gap-3 rounded border border-line bg-surface px-3.5 py-2.5"
+    }
+}
 
 #[component]
 pub fn Leaderboard() -> impl IntoView {
@@ -24,7 +56,10 @@ pub fn Leaderboard() -> impl IntoView {
         // the eligibility paragraph that used to sit here was pure narration.
         <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"Leaderboard"</h1>
 
-        <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"tallying…"</p> }>
+        // A placeholder shaped like the list, rather than a word where the list
+        // will be: "tallying…" is one line tall, so the page grew by six rows
+        // the moment the tally arrived.
+        <Suspense fallback=|| view! { <RowSkeleton count=6/> }>
             {move || {
                 entries
                     .get()
@@ -50,16 +85,16 @@ pub fn Leaderboard() -> impl IntoView {
                                         .enumerate()
                                         .map(|(i, entry)| {
                                             let rank = i + 1;
-                                            // First place in the accent, the
-                                            // rest quiet. Whole class strings,
-                                            // not a toggled utility: the
-                                            // Tailwind scanner reads these .rs
-                                            // sources literally.
-                                            let rank_class = if rank == 1 {
-                                                "w-5 flex-none text-right text-[0.8125rem] font-semibold tabular-nums text-accent"
-                                            } else {
-                                                "w-5 flex-none text-right text-[0.8125rem] tabular-nums text-ink-3"
-                                            };
+                                            // Every interpolated piece is
+                                            // itself a whole literal, so the
+                                            // scanner still sees each one in
+                                            // full somewhere in the source.
+                                            let li_class = format!(
+                                                "{} {} {}",
+                                                row_class(rank),
+                                                "animate-rise-in",
+                                                stagger(i),
+                                            );
                                             // Contributors who signed in without
                                             // a Google picture had no avatar at
                                             // all, so their name started 32px
@@ -75,8 +110,8 @@ pub fn Leaderboard() -> impl IntoView {
                                                 .unwrap_or_else(|| "?".into());
                                             let unit = if entry.upload_count == 1 { "son" } else { "sons" };
                                             view! {
-                                                <li class="flex items-center gap-3 rounded border border-line bg-surface px-3.5 py-2.5">
-                                                    <span class=rank_class>{rank}</span>
+                                                <li class=li_class>
+                                                    <span class=rank_class(rank)>{rank}</span>
                                                     {entry
                                                         .avatar_url
                                                         .clone()

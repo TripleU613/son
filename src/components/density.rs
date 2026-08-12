@@ -1,8 +1,21 @@
-//! Grid density presets. Not persisted across visits (an in-memory signal,
-//! reset to `Cozy` on every page load) -- keeping it simple avoids the
-//! hydration-mismatch complexity of reading `localStorage` before first
-//! paint, and a density toggle is a light, low-stakes preference that isn't
-//! worth that cost.
+//! Grid density presets, and the site's skeleton-loader family.
+//!
+//! Density is not persisted across visits (an in-memory signal, reset to `Cozy`
+//! on every page load) -- keeping it simple avoids the hydration-mismatch
+//! complexity of reading `localStorage` before first paint, and a density
+//! toggle is a light, low-stakes preference that isn't worth that cost.
+//!
+//! The skeletons live in this file on purpose, and it is not an accident of
+//! history. A skeleton's whole job is to occupy the exact shape the real
+//! content will, and for the grid that shape *is* `Density::grid_class` --
+//! column counts at five breakpoints, including the compact preset's
+//! `min-[1900px]` step. Put the placeholder grid in another module and the two
+//! class strings drift apart silently, and the drift only shows up as a layout
+//! jump on the one viewport nobody tested. Keeping them adjacent is the cheap
+//! version of keeping them in sync.
+//!
+//! Everything here is `pub` in a `pub mod`, so the components other pages have
+//! not wired up yet do not trip clippy's dead-code lint under `-D warnings`.
 
 use leptos::prelude::*;
 
@@ -85,19 +98,148 @@ pub fn DensityToggle(
     }
 }
 
+/// Entrance delay for the i-th item in a staggered list.
+///
+/// Whole literal class strings out of a fixed table, for the same reason
+/// everything else in this codebase is: the Tailwind scanner reads these `.rs`
+/// files as raw text, so the moment one of these is assembled with `format!`
+/// the rule is never generated, the stagger silently disappears, and nothing
+/// anywhere reports an error.
+///
+/// Clamping past the end rather than wrapping is deliberate. With a modulo, a
+/// 24-tile page would restart the cascade from 0ms a third of the way down and
+/// again two thirds of the way down, so tiles lower on the page would animate
+/// *before* tiles above them. Clamping just means everything past the eighth
+/// item shares the last step, which reads as one wave that runs out of runway.
+pub fn stagger(i: usize) -> &'static str {
+    const STEPS: [&str; 8] = [
+        "[animation-delay:0ms]",
+        "[animation-delay:40ms]",
+        "[animation-delay:80ms]",
+        "[animation-delay:120ms]",
+        "[animation-delay:160ms]",
+        "[animation-delay:200ms]",
+        "[animation-delay:240ms]",
+        "[animation-delay:280ms]",
+    ];
+    STEPS[i.min(STEPS.len() - 1)]
+}
+
 /// A grid of shimmering placeholder tiles, matching the real grid's shape --
 /// replaces a bare "loading…" line so the layout doesn't jump once real
 /// cards arrive. Square, and with no caption bar, because that is what a card
 /// is now.
+///
+/// `density` takes the same preset the real grid is about to use, so the
+/// placeholder has the same column count at every breakpoint. It used to
+/// hardcode the cozy 2/3/4, which meant a compact-mode load drew four columns
+/// and then reflowed to eight at `min-[1900px]` the instant the cards landed.
 #[component]
-pub fn GridSkeleton(#[prop(default = 8)] count: usize) -> impl IntoView {
+pub fn GridSkeleton(
+    #[prop(default = 8)] count: usize,
+    #[prop(optional)] density: Option<Density>,
+) -> impl IntoView {
+    let grid = density.unwrap_or_default().grid_class();
     view! {
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4" aria-hidden="true">
+        <div class=grid aria-hidden="true">
             {(0..count)
-                .map(|_| {
+                .map(|i| {
+                    // The only interpolated fragment is a whole class string
+                    // returned by `stagger`, which is the pattern like.rs
+                    // already uses -- never a class built from pieces.
+                    let cls = format!("skeleton aspect-square rounded-lg border border-line {}", stagger(i));
+                    view! { <div class=cls></div> }
+                })
+                .collect_view()}
+        </div>
+    }
+}
+
+/// Placeholder rows for the leaderboard.
+///
+/// The shape mirrors the real row element for element -- rank, avatar, name,
+/// count -- because the point of a skeleton is that nothing moves when the data
+/// arrives. If leaderboard.rs's row changes, this changes with it.
+#[component]
+pub fn RowSkeleton(#[prop(default = 6)] count: usize) -> impl IntoView {
+    view! {
+        <ol class="m-0 grid list-none gap-2 p-0" aria-hidden="true">
+            {(0..count)
+                .map(|i| {
+                    let cls = format!(
+                        "flex items-center gap-3 rounded border border-line bg-surface px-3.5 py-2.5 animate-rise-in {}",
+                        stagger(i),
+                    );
                     view! {
-                        <div class="aspect-square animate-pulse overflow-hidden rounded-lg border border-line bg-surface-raised"></div>
+                        <li class=cls>
+                            <span class="skeleton h-3 w-5 flex-none rounded"></span>
+                            <span class="skeleton h-8 w-8 flex-none rounded-full"></span>
+                            <span class="skeleton h-3.5 min-w-0 flex-1 rounded"></span>
+                            <span class="skeleton h-3 w-14 flex-none rounded"></span>
+                        </li>
                     }
+                })
+                .collect_view()}
+        </ol>
+    }
+}
+
+/// Placeholder for a single son's page.
+///
+/// The outer class string is detail.rs's article wrapper verbatim, so the
+/// figure and the meta column start in their final positions and the page does
+/// not reflow around the reader when the son resolves. The image block is
+/// square because `storage::square` crops every upload to 1024x1024, and it
+/// carries the same `68vh` cap the real figure does.
+#[component]
+pub fn DetailSkeleton() -> impl IntoView {
+    view! {
+        <article
+            class="flex flex-col gap-4 pb-4 min-[860px]:flex-row min-[860px]:items-start min-[860px]:justify-center min-[860px]:gap-8 min-[860px]:pb-6"
+            aria-hidden="true"
+        >
+            <div class="skeleton mx-auto aspect-square w-full max-w-[min(100%,68vh)] rounded-lg border border-line min-[860px]:mx-0"></div>
+            <div class="min-w-0 min-[860px]:w-[320px] min-[860px]:flex-none">
+                <div class="skeleton h-7 w-3/4 rounded"></div>
+                <div class="skeleton mt-3 h-3.5 w-1/2 rounded"></div>
+                // Four blocks for the four action controls, so the row that
+                // holds them reserves its height rather than appearing later.
+                <div class="mt-3 flex items-center gap-2 border-t border-line pt-3">
+                    <div class="skeleton h-9 w-9 rounded"></div>
+                    <div class="skeleton h-9 w-9 rounded"></div>
+                    <div class="skeleton h-9 w-9 rounded"></div>
+                    <div class="skeleton h-9 w-9 rounded"></div>
+                </div>
+            </div>
+        </article>
+    }
+}
+
+/// Placeholder for a search results page: the result-summary line, then a grid.
+#[component]
+pub fn SearchSkeleton(#[prop(default = 8)] count: usize) -> impl IntoView {
+    view! {
+        <div aria-hidden="true">
+            <div class="skeleton mb-4 h-3 w-24 rounded"></div>
+            <GridSkeleton count=count/>
+        </div>
+    }
+}
+
+/// Generic placeholder for a block of text -- the one to reach for on any panel
+/// that is not a grid, a row list or a son.
+///
+/// Ragged widths from a fixed literal table, clamped exactly like `stagger`:
+/// equal-width bars read as a form, not as prose.
+#[component]
+pub fn LineSkeleton(#[prop(default = 3)] lines: usize) -> impl IntoView {
+    const WIDTHS: [&str; 4] = ["w-full", "w-11/12", "w-4/5", "w-2/3"];
+    view! {
+        <div class="grid gap-2" aria-hidden="true">
+            {(0..lines)
+                .map(|i| {
+                    let cls = format!("skeleton h-3.5 rounded {}", WIDTHS[i.min(WIDTHS.len() - 1)]);
+                    view! { <div class=cls></div> }
                 })
                 .collect_view()}
         </div>

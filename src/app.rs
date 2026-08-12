@@ -8,9 +8,12 @@ use crate::api::current_user;
 use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
-use crate::components::icon::{Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound};
+use crate::components::icon::{
+    Ico, LuCircleAlert, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound,
+};
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
+use crate::components::progress::{Loading, TopProgress};
 use crate::components::search::SearchPage;
 use crate::components::search_box::SearchBox;
 use crate::components::sort_chips::{GalleryView, SortCtx};
@@ -50,11 +53,23 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-                // Real icon files now that the brand has a mark, rather than the
-                // emoji-in-an-SVG placeholder. 32px for tabs, 180px for an iOS
-                // home screen.
-                <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"/>
-                <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+                // The mark is a crying face, drawn as vector and rasterised
+                // from that one source so all three sizes agree.
+                //
+                // Order matters and is not stylistic. Chrome and Firefox pick
+                // the LAST icon they understand, so declaring the SVG after the
+                // PNG (with an explicit type, or they will not consider it) is
+                // what gets them the vector -- which is the whole point at a
+                // 16px favicon, where a downscaled raster smears. Safari and
+                // iOS ignore the SVG and keep the PNG path.
+                //
+                // The version query is a deliberate cache bust: public/ is
+                // served through Cloudflare and both PNG paths already have
+                // history at the edge, so replacing the bytes at an unchanged
+                // URL would leave the previous mark in tabs for hours.
+                <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2"/>
+                <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+                <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2"/>
                 <meta name="theme-color" content="#08090b"/>
                 <AutoReload options=options.clone()/>
                 <HydrationScripts options=options.clone()/>
@@ -93,11 +108,25 @@ pub fn App() -> impl IntoView {
     let (view, set_view) = signal(GalleryView::default());
     provide_context(SortCtx { view, set_view });
 
+    // The in-flight counter behind the top bar. Creating a signal and providing
+    // context during render is fine; it is writing an existing one that kills
+    // hydration, which is why nothing here calls `start`.
+    let loading = Loading::provide();
+
     view! {
         <Title text="son collection"/>
         <Meta property="og:site_name" content="son collection"/>
 
-        <Router>
+        // Handing the router a `set_is_routing` is not just a notification: it
+        // switches client-side navigation to a transition, so the previous view
+        // stays mounted until the new route's resources resolve, and this stays
+        // true for exactly that window. That is a real load state rather than a
+        // guessed timer -- and it is also why the route-level <Suspense>
+        // fallbacks no longer flash on in-app navigation. The bar replaces
+        // them there; they still render on a full page load.
+        <Router set_is_routing=SignalSetter::map(move |routing: bool| {
+            if routing { loading.start() } else { loading.finish() }
+        })>
             // One shell, rearranged entirely by CSS. The primary nav exists
             // exactly once in the DOM and becomes either the desktop sidebar's
             // link list or the mobile bottom bar -- rendering two copies would
@@ -105,6 +134,10 @@ pub fn App() -> impl IntoView {
             // would invite the hydration mismatch that already took down the
             // wasm module once this session.
             <div class="flex min-h-[100dvh] flex-col">
+                // Fixed, so per spec it is not a flex item and cannot touch
+                // this column's layout. First in source order anyway, because
+                // it is first on screen.
+                <TopProgress/>
                 <Header/>
                 <BottomNav/>
                 <main class="mx-auto w-full max-w-content flex-1 px-4 pt-[calc(56px+0.75rem)] pb-[calc(58px+env(safe-area-inset-bottom)+1.5rem)] lg:px-8 lg:pt-[calc(60px+1.5rem)] lg:pb-8">
@@ -127,37 +160,61 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/tos") view=Terms/>
                     </Routes>
                 </main>
-                // Legal links live in a thin footer now that desktop has no
-                // sidebar to hang them off. Padded clear of the mobile bottom
-                // nav rather than competing with it.
-                //
-                // The rule and the inner wrapper are what stop it reading as two
-                // words dropped in the void: on a short page (a gallery with one
-                // row) the links previously floated in the middle of empty
-                // background with nothing terminating the page. The wrapper also
-                // puts them on the same `max-w-content` column and the same
-                // lg:px-8 gutter as <main>, which the old lg:px-6 quietly missed.
-                // Kept, but reduced to a whisper: no rule, no band, no weight.
-                //
-                // It survives at all because these are the only links to
-                // /privacy and /tos anywhere on the site, and Google's OAuth
-                // verification requires a reachable privacy policy for the
-                // sign-in this app ships. Deleting the footer deletes the only
-                // route to it. What it does not need is a hairline across the
-                // full content width announcing two words, which is what made it
-                // read as a section rather than as fine print.
-                <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+0.75rem)] pt-2 lg:px-8 lg:pb-6">
-                    <div class="mx-auto flex max-w-content justify-center gap-4 text-[0.6875rem] text-ink-3/70">
-                        <A href="/privacy" attr:class="transition-colors hover:text-ink-2">
-                            "Privacy"
-                        </A>
-                        <A href="/tos" attr:class="transition-colors hover:text-ink-2">
-                            "Terms"
-                        </A>
-                    </div>
-                </footer>
+                <SiteFooter/>
             </div>
         </Router>
+    }
+}
+
+/// Legal fine print, on the pages where it is not in the way.
+///
+/// It used to sit under every page. The gallery and a son page are where people
+/// actually spend time, and two words of boilerplate terminating an image grid
+/// is the kind of permanent furniture the redesign is removing -- so those two
+/// routes drop it.
+///
+/// It is not deleted, and cannot be: these are the site's only links to
+/// /privacy and /tos, and Google's OAuth verification requires a reachable
+/// privacy policy for the sign-in this app ships. It still server-renders as a
+/// real crawlable anchor on /upload, /leaderboard, /search and the legal pages
+/// themselves, and both routes are in the sitemap. `AccountAction`'s menu
+/// carries the same two links for signed-in visitors on any page; the footer
+/// stays *in addition* because the signed-out control is a bare sign-in link
+/// with no menu behind it -- exactly the audience that needs the policy before
+/// they sign in.
+///
+/// A component rather than an inline branch in `App`, because `use_location`
+/// panics outside `<Router>` and `App`'s body runs before the `<Router>` in its
+/// own view exists. That failure is at runtime, and on the server it takes the
+/// whole request down. `AccountAction` has the same shape for the same reason.
+#[component]
+fn SiteFooter() -> impl IntoView {
+    let path = use_location().pathname;
+    // `<Show>`, not `.then()`: the pathname is genuinely reactive and this has
+    // to flip on client-side navigation. The server knows the request path, so
+    // both renders agree and there is nothing here to mismatch.
+    let show = move || {
+        let p = path.get();
+        !(p == "/" || p.starts_with("/son/"))
+    };
+
+    view! {
+        <Show when=show>
+            // Padded clear of the mobile bottom nav rather than competing with
+            // it, and on the same max-w-content column and lg gutter as <main>
+            // so it lines up with the content above rather than with the
+            // viewport.
+            <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+0.75rem)] pt-2 lg:px-8 lg:pb-6">
+                <div class="mx-auto flex max-w-content justify-center gap-4 text-[0.6875rem] text-ink-3/70">
+                    <A href="/privacy" attr:class="transition-colors hover:text-ink-2">
+                        "Privacy"
+                    </A>
+                    <A href="/tos" attr:class="transition-colors hover:text-ink-2">
+                        "Terms"
+                    </A>
+                </div>
+            </footer>
+        </Show>
     }
 }
 
@@ -352,6 +409,25 @@ fn AccountAction() -> impl IntoView {
                                                         </A>
                                                     }
                                                 })}
+                                            // The fine print, reachable from
+                                            // any page including the gallery,
+                                            // which no longer carries a footer.
+                                            <div class="my-1 border-t border-line"/>
+                                            <A
+                                                href="/privacy"
+                                                attr:class="block px-3 py-2 text-[0.85rem] text-ink-2 transition-colors hover:bg-surface-hover hover:text-ink"
+                                                attr:role="menuitem"
+                                            >
+                                                "Privacy"
+                                            </A>
+                                            <A
+                                                href="/tos"
+                                                attr:class="block px-3 py-2 text-[0.85rem] text-ink-2 transition-colors hover:bg-surface-hover hover:text-ink"
+                                                attr:role="menuitem"
+                                            >
+                                                "Terms"
+                                            </A>
+                                            <div class="my-1 border-t border-line"/>
                                             <form method="post" action="/auth/logout">
                                                 <button
                                                     type="submit"
@@ -449,10 +525,27 @@ fn NotFound() -> impl IntoView {
 
     view! {
         <Title text="no son here — son collection"/>
+        // Same shape as the site's other zero states -- icon tile, one line --
+        // which is what makes this read as a finished page rather than a stub,
+        // now that it carries no link of its own. It is not a dead end: the
+        // header logo is a home link at every width and the mobile bottom bar
+        // still has Gallery.
+        //
+        // The tile is sized by its padding and the 28px glyph, not by an
+        // explicit box, so there is one number to change rather than three that
+        // can disagree.
+        //
+        // Written out here rather than reusing EmptyState because that
+        // component's line is a <p>: a 404 needs a real <h1>, and dropping the
+        // page's only heading is an SEO regression on top of an accessibility
+        // one. The crying face this page used to end on is not gone either --
+        // it is the favicon in the tab of this very page.
         <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
-            <h1 class="m-0 text-[2rem] font-bold">"404"</h1>
-            <p>"No son at this address. Son 😭"</p>
-            <A href="/">"back to the collection"</A>
+            <span class="inline-flex items-center justify-center rounded-lg border border-line bg-surface p-3 text-ink-3">
+                <Ico icon=LuCircleAlert size=28/>
+            </span>
+            <h1 class="m-0 text-base font-semibold text-ink">"No son at this address"</h1>
+            <p class="m-0 text-[0.8125rem] text-ink-3">"404"</p>
         </section>
     }
 }

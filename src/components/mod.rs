@@ -10,6 +10,7 @@ pub mod leaderboard;
 pub mod legal;
 pub mod like;
 pub mod more_sons;
+pub mod progress;
 pub mod report;
 pub mod search;
 pub mod search_box;

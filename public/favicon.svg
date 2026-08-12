@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="son collection">
+  <!-- The crying face the wordmark already carries three of, drawn as vector so
+       it stays sharp at the 16px a browser tab actually renders. Four colours,
+       three of them straight out of tailwind.config.js.
+
+       No background: the disk is the mark, and transparency lets it sit on a
+       light or a dark tab strip. The rim is not decoration. Without it the
+       yellow disk loses its edge against a white tab strip.
+
+       Note for anyone editing these comments: an XML comment may not contain a
+       double hyphen. One here made the whole file unparseable, and every
+       renderer reported that as a blank image rather than as an error. -->
+  <circle cx="32" cy="32" r="27" fill="#ffcc33" stroke="#eab900" stroke-width="2"/>
+  <!-- Tears, sampled from logo-large.png (#00a6fc to #3eccfc). Behind the eyes
+       in source order so the rounded caps tuck under them. -->
+  <rect x="15.5" y="30" width="6" height="23" rx="3" fill="#00a6fc"/>
+  <rect x="42.5" y="30" width="6" height="23" rx="3" fill="#00a6fc"/>
+  <!-- Squeezed shut eyes and an open wail. Stroke weight is what survives the
+       downscale: thinner than this and both arcs disappear at 16px. -->
+  <path d="M13.5 28 Q18.5 21 23.5 28" fill="none" stroke="#0a0a0b" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M40.5 28 Q45.5 21 50.5 28" fill="none" stroke="#0a0a0b" stroke-width="3.4" stroke-linecap="round"/>
+  <ellipse cx="32" cy="44" rx="8.5" ry="7" fill="#0a0a0b"/>
+</svg>

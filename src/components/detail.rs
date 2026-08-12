@@ -1,9 +1,9 @@
 use leptos::prelude::*;
 use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
-use leptos_router::hooks::use_params_map;
+use leptos_router::hooks::{use_navigate, use_params_map};
 
-use crate::api::get_son;
+use crate::api::{get_son, son_neighbours};
 use crate::components::icon::{Ico, LuDownload, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::more_sons::MoreSons;
@@ -87,6 +87,33 @@ fn image_object_json_ld(s: &Son) -> String {
     )
 }
 
+/// How far a finger has to travel sideways before letting go steps to the
+/// neighbouring son.
+///
+/// A fixed distance rather than a fraction of the figure's width, because that
+/// width is only knowable from the DOM and the server render has no
+/// `getBoundingClientRect` to agree with. Anything measured would have to be
+/// seeded on the client after mount, which is the hydration mismatch this file
+/// cannot afford.
+const SWIPE_COMMIT_PX: f64 = 64.0;
+
+/// Past this much vertical travel the gesture is the page scrolling, not a
+/// swipe, and it is handed back rather than competed with.
+const SWIPE_ABANDON_Y: f64 = 24.0;
+
+/// How far the son may be dragged when there is no son that way.
+///
+/// Resistance rather than a wall: it still moves, so the gesture is visibly
+/// understood *and* visibly refused, which is what tells someone they have
+/// reached the end of the collection. A drag that did nothing at all would read
+/// as the feature being broken.
+const SWIPE_RUBBER_PX: f64 = 28.0;
+
+// None of the three is `#[cfg]`-gated on purpose. They are read by pointer
+// handlers that compile under both feature sets — the handlers are inert on the
+// server, but they are still built there, so gating these would break the ssr
+// build rather than quiet it.
+
 /// A single son's page.
 ///
 /// This is the URL people paste into Discord and group chats, so the OG tags
@@ -102,8 +129,71 @@ pub fn SonDetail() -> impl IntoView {
     // Blocking holds the stream until the son is known.
     let son = Resource::new_blocking(id, |id| async move { get_son(id).await });
 
+    // Swipe state, declared here rather than inside the `son.get().map(...)`
+    // closure below. That closure re-runs on every change to the resource, so
+    // signals minted inside it would be brand new after each step and the ones
+    // the pointer handlers had already captured would be orphaned — the gesture
+    // would work exactly once.
+    //
+    // `drag_x` is how far the son currently follows the finger, `settling` is
+    // whether it is animating back to rest, `grab` is where the finger landed.
+    // All three start at values the server can print, which is what keeps
+    // hydration intact: seeding any of them from `window`, a capability probe or
+    // a resource would kill the wasm module and leave the page inert rather than
+    // merely mis-drawn.
+    let (drag_x, set_drag_x) = signal(0.0_f64);
+    let (settling, set_settling) = signal(false);
+    let (grab, set_grab) = signal(Option::<(f64, f64)>::None);
+    let (prev_slug, set_prev_slug) = signal(Option::<String>::None);
+    let (next_slug, set_next_slug) = signal(Option::<String>::None);
+    // Safe here: `SonDetail` only ever mounts inside `<Router>`, and this is a
+    // documented no-op during SSR. It does mean the component can no longer be
+    // rendered standalone in a test without a Router around it.
+    let navigate = use_navigate();
+
+    // The neighbouring slugs, in an `Effect` and deliberately not a `Resource`.
+    //
+    // This route is `SsrMode::Async`, which holds the whole response until every
+    // resource on it resolves — and the only reason it is Async is that the og:
+    // tags have to be in the server HTML. A second resource here would put a D1
+    // round trip in front of the time-to-first-byte of the one page whose entire
+    // job is being unfurled in a chat client, to feed a touch gesture that cannot
+    // exist during SSR at all. Effects are client-only by construction, so the
+    // cost lands only where the feature is usable.
+    Effect::new(move |_| {
+        let id = id();
+        // Cleared synchronously, before the request goes out: mid-fetch these
+        // still hold the *previous* son's neighbours, and a swipe that commits
+        // against them navigates somewhere with no relation to what is on
+        // screen. The drag is reset for the same reason — the gesture that
+        // brought us here is over.
+        set_prev_slug.set(None);
+        set_next_slug.set(None);
+        set_drag_x.set(0.0);
+        set_settling.set(false);
+        leptos::task::spawn_local(async move {
+            match son_neighbours(id).await {
+                Ok((newer, older)) => {
+                    set_prev_slug.set(newer);
+                    set_next_slug.set(older);
+                }
+                // Warn, don't surface. The grid below is still a way to another
+                // son, so the only visible consequence is that the gesture
+                // rubber-bands in both directions instead of stepping.
+                Err(e) => leptos::logging::warn!("neighbours unavailable: {e}"),
+            }
+        });
+    });
+
     view! {
-        <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"finding the son…"</p> }>
+        // `Transition`, not `Suspense`: every committed swipe re-runs the
+        // resource, and under `Suspense` that blanks the whole article back to
+        // "finding the son…" for a D1 round trip — the opposite of a continuous
+        // gesture. `Transition` holds the son already on screen until the next
+        // one lands. Server-side the two are the same code path (both are
+        // `SuspenseBoundary`; only the client rebuild branches on it), so the og:
+        // tags stay in the HTML rather than moving into a JS-swapped <template>.
+        <Transition fallback=|| view! { <p class="py-14 text-center text-ink-2">"finding the son…"</p> }>
             {move || {
                 son.get()
                     .map(|res| match res {
@@ -131,6 +221,152 @@ pub fn SonDetail() -> impl IntoView {
                             // for the <time datetime> attribute and formatted
                             // separately for display.
                             let iso_date: String = s.created_at.chars().take(10).collect();
+                            // Bound out here rather than written inside the
+                            // view: the macro captures by move, so a `.clone()`
+                            // spelled inside it is already too late for the use
+                            // that follows (the lesson card.rs learned).
+                            let uploader_name = match &s.uploader {
+                                Some(u) => u.display_name.clone(),
+                                None => "anonymous".to_string(),
+                            };
+                            let uploader_avatar = s
+                                .uploader
+                                .as_ref()
+                                .and_then(|u| u.avatar_url.clone());
+
+                            // The swipe, wired to the <figure> below.
+                            //
+                            // Pointer events, not touch events:
+                            // `TouchEvent::touches()` is gated on web-sys's
+                            // `TouchList` feature, which nothing in this tree
+                            // turns on, so touch would mean a Cargo.toml edit.
+                            // `PointerEvent` costs nothing because tachys
+                            // already enables it for both builds — the same
+                            // arrangement like.rs relies on for `MouseEvent` and
+                            // upload.rs for `DragEvent`. If a future leptos bump
+                            // trims that feature list this breaks with "no
+                            // method named pointer_type" rather than with a
+                            // missing-feature error, so look here first.
+                            //
+                            // There is no `setPointerCapture` and no
+                            // `preventDefault`. The spec gives touch pointers
+                            // implicit capture on pointerdown, so move and up
+                            // keep arriving at the figure after the finger
+                            // leaves it, and the figure's own touch-action
+                            // already stops the browser panning sideways, so
+                            // there is no default left to cancel. Where implicit
+                            // capture is missing the moves simply stop and the
+                            // swipe never commits — degrading to exactly today's
+                            // behaviour, which is the required way for this to
+                            // fail.
+                            //
+                            // These are built here, not at the top of the
+                            // component: the closure around this match has to
+                            // stay `Fn` to re-render, and moving a handler into
+                            // it would make it `FnOnce`. Cloning `navigate` per
+                            // render only borrows the outer one, so the closure
+                            // keeps its `Fn`.
+                            let navigate = navigate.clone();
+
+                            let on_down = move |ev: leptos::ev::PointerEvent| {
+                                // A capability test, not a size test.
+                                // `window.innerWidth` would disagree between the
+                                // server render and the client and take the wasm
+                                // module down with it; `pointer_type` is only
+                                // ever read inside a handler, which the server
+                                // never runs. A mouse falls straight through and
+                                // keeps click-drag and save-image.
+                                if ev.pointer_type() != "touch" {
+                                    return;
+                                }
+                                set_settling.set(false);
+                                set_grab
+                                    .set(
+                                        Some((
+                                            f64::from(ev.client_x()),
+                                            f64::from(ev.client_y()),
+                                        )),
+                                    );
+                            };
+
+                            let on_move = move |ev: leptos::ev::PointerEvent| {
+                                let Some((x0, y0)) = grab.get_untracked() else {
+                                    return;
+                                };
+                                let dx = f64::from(ev.client_x()) - x0;
+                                let dy = f64::from(ev.client_y()) - y0;
+                                // Mostly-vertical travel is the page scrolling.
+                                if dy.abs() > SWIPE_ABANDON_Y && dy.abs() > dx.abs() {
+                                    set_grab.set(None);
+                                    set_settling.set(true);
+                                    set_drag_x.set(0.0);
+                                    return;
+                                }
+                                let has_target = if dx < 0.0 {
+                                    next_slug.get_untracked().is_some()
+                                } else {
+                                    prev_slug.get_untracked().is_some()
+                                };
+                                // Scaled first and clamped second, so the
+                                // resistance is felt from the first pixel rather
+                                // than after 28 free ones.
+                                set_drag_x
+                                    .set(
+                                        if has_target {
+                                            dx
+                                        } else {
+                                            (dx * 0.4)
+                                                .clamp(-SWIPE_RUBBER_PX, SWIPE_RUBBER_PX)
+                                        },
+                                    );
+                            };
+
+                            let on_up = move |_: leptos::ev::PointerEvent| {
+                                if grab.get_untracked().is_none() {
+                                    return;
+                                }
+                                set_grab.set(None);
+                                let dx = drag_x.get_untracked();
+                                set_settling.set(true);
+                                set_drag_x.set(0.0);
+                                if dx.abs() < SWIPE_COMMIT_PX {
+                                    return;
+                                }
+                                // Left goes to the older son, right to the newer
+                                // one: the direction every photo viewer uses,
+                                // and the same order the grid below is in.
+                                let target = if dx < 0.0 {
+                                    next_slug.get_untracked()
+                                } else {
+                                    prev_slug.get_untracked()
+                                };
+                                if let Some(slug) = target {
+                                    navigate(&format!("/son/{slug}"), Default::default());
+                                }
+                            };
+
+                            let on_cancel = move |_: leptos::ev::PointerEvent| {
+                                set_grab.set(None);
+                                set_settling.set(true);
+                                set_drag_x.set(0.0);
+                            };
+
+                            // Two whole class strings, never a transition
+                            // utility layered onto the resting one (the like.rs
+                            // pattern): layered, both land at equal specificity
+                            // and stylesheet order decides. While the finger is
+                            // down there must be no transition at all or the son
+                            // lags behind it; the settle back to rest is the
+                            // only animated state, and prefers-reduced-motion
+                            // needs nothing new here because style/tailwind.css
+                            // already zeroes every transition globally.
+                            let img_class = move || {
+                                if settling.get() {
+                                    "h-auto max-h-[calc(68vh-1.5rem)] w-auto max-w-full rounded object-contain transition-transform duration-200 ease-out"
+                                } else {
+                                    "h-auto max-h-[calc(68vh-1.5rem)] w-auto max-w-full rounded object-contain"
+                                }
+                            };
                             view! {
                                 <Title text=format!("{} — son collection", s.title)/>
                                 <Meta name="description" content=description.clone()/>
@@ -207,16 +443,45 @@ pub fn SonDetail() -> impl IntoView {
                                     // shove the panel back out to the edge --
                                     // reintroducing the exact gap this change
                                     // removes.
+                                    //
+                                    // The gesture handlers live on the figure
+                                    // and nowhere else. No control sits inside
+                                    // it, so a drag can never swallow a
+                                    // button's click. `pan-y pinch-zoom` rather
+                                    // than plain `pan-y` because pinching a meme
+                                    // is the one thing a visitor may
+                                    // legitimately want to do to it; the
+                                    // horizontal pan the browser would otherwise
+                                    // take for scrolling is the only thing given
+                                    // up, and it is what the swipe is made of.
                                     <figure
-                                        class="m-0 mx-auto flex max-h-[68vh] items-center justify-center overflow-hidden rounded-lg border border-line bg-surface p-3 min-[860px]:mx-0"
+                                        class="m-0 mx-auto flex max-h-[68vh] select-none items-center justify-center overflow-hidden rounded-lg border border-line bg-surface p-3 [touch-action:pan-y_pinch-zoom] min-[860px]:mx-0"
                                         style=format!(
                                             "max-width: min(100%, calc({}px + 1.5rem), calc(68vh * {:.4} + 1.5rem))",
                                             s.width,
                                             f64::from(s.width.max(1)) / f64::from(s.height.max(1)),
                                         )
+                                        on:pointerdown=on_down
+                                        on:pointermove=on_move
+                                        on:pointerup=on_up
+                                        on:pointercancel=on_cancel
                                     >
+                                        // The son carries the motion, not the
+                                        // frame: it slides inside the figure's
+                                        // own overflow-hidden box, which reads
+                                        // as looking through a window rather
+                                        // than shoving one. It also keeps the
+                                        // figure's static `style=` attribute
+                                        // clear of a reactive `style:transform`.
+                                        //
+                                        // `{:.1}` so the server prints exactly
+                                        // `translateX(0.0px)` and the hydrating
+                                        // client computes the identical string.
                                         <img
-                                            class="h-auto max-h-[calc(68vh-1.5rem)] w-auto max-w-full rounded object-contain"
+                                            class=img_class
+                                            style:transform=move || {
+                                                format!("translateX({:.1}px)", drag_x.get())
+                                            }
                                             src=s.orig_url.clone()
                                             alt=s.title.clone()
                                             width=s.width
@@ -229,24 +494,63 @@ pub fn SonDetail() -> impl IntoView {
                                     // `flex-none` so it never shrinks: the
                                     // figure is the thing with room to give.
                                     <div class="min-w-0 min-[860px]:w-[320px] min-[860px]:flex-none">
-                                        <h1 class="m-0 mb-3 text-[1.375rem] font-bold tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
+                                        // Title, credit and controls are one
+                                        // block, not three things at arm's
+                                        // length. Measured before: 12px from
+                                        // title to credit but 36px from credit
+                                        // to the first control, so the credit
+                                        // floated between them belonging to
+                                        // neither. It belongs to the title, and
+                                        // the spacing now says so -- 4px up to
+                                        // the title, 16px down to the bar.
+                                        //
+                                        // `leading-tight` because at the 1.5
+                                        // inherited from `body` a two-line title
+                                        // opens a trough right through the son's
+                                        // own name. That is a utility against an
+                                        // inherited value, not a
+                                        // same-specificity fight with a
+                                        // primitive.
+                                        <h1 class="m-0 text-[1.375rem] font-bold leading-tight tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
 
-                                        // The icon belongs to the name, so it
-                                        // sits in the same span at a tighter
-                                        // gap -- at a flat gap-2 it floated
-                                        // equidistant between the name and the
-                                        // separator and read as its own item.
-                                        // The separator is decorative and
+                                        // The avatar or icon belongs to the
+                                        // name, so it sits in the same span at
+                                        // a tighter gap -- at a flat gap-2 it
+                                        // floated equidistant between the name
+                                        // and the separator and read as its own
+                                        // item. The separator is decorative and
                                         // aria-hidden: it carries no meaning a
                                         // screen reader announcing "middle dot"
                                         // would add.
-                                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pb-3 text-[0.8125rem] text-ink-3">
+                                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] text-ink-3">
                                             <span class="inline-flex items-center gap-1.5">
-                                                <Ico icon=LuUserRound size=14/>
-                                                {match &s.uploader {
-                                                    Some(u) => u.display_name.clone(),
-                                                    None => "anonymous".to_string(),
+                                                // The uploader's picture when
+                                                // there is one. It has been on
+                                                // the wire in `Uploader` all
+                                                // along and was never drawn.
+                                                // Explicit width/height so the
+                                                // line cannot reflow when it
+                                                // loads, and alt="" because the
+                                                // name it labels is the very
+                                                // next thing in this span.
+                                                {match uploader_avatar {
+                                                    Some(src) => {
+                                                        view! {
+                                                            <img
+                                                                class="h-[18px] w-[18px] flex-none rounded-full object-cover"
+                                                                src=src
+                                                                alt=""
+                                                                width="18"
+                                                                height="18"
+                                                                loading="lazy"
+                                                                decoding="async"
+                                                            />
+                                                        }
+                                                            .into_any()
+                                                    }
+                                                    None => view! { <Ico icon=LuUserRound size=14/> }.into_any(),
                                                 }}
+                                                {uploader_name}
                                             </span>
                                             <span class="text-line-strong" aria-hidden="true">"·"</span>
                                             // <time> so the machine-readable
@@ -257,32 +561,45 @@ pub fn SonDetail() -> impl IntoView {
                                             </time>
                                         </div>
 
-
-                                        // Icon-only actions. The count beside
-                                        // the heart is data, not a label; every
-                                        // control carries an aria-label and a
-                                        // title so the meaning is available to
-                                        // screen readers and on hover.
-                                        // `border-t` only, not `border-y`: the
-                                        // "More sons" section below draws its
-                                        // own top rule, so a bottom rule here
-                                        // left two hairlines 62px apart with
-                                        // nothing between them.
-                                        // No bottom margin: what follows is the
-                                        // article's own padding and then the
-                                        // "More sons" rule, and all three
-                                        // stacked put 84px of empty background
-                                        // between the last button and the next
-                                        // heading with a hairline adrift in the
-                                        // middle of it.
-                                        <div class="mt-3 flex items-center gap-2 border-t border-line pt-3">
+                                        // A real surface, not a hairline with
+                                        // glyphs adrift under it. Same border,
+                                        // radius and fill as the figure directly
+                                        // above, so the son and the things you
+                                        // can do to it read as one object; the
+                                        // rule that used to be here was doing
+                                        // the work of a container without
+                                        // looking like one.
+                                        //
+                                        // Hierarchy is positional: the primary
+                                        // action holds the leading edge, the
+                                        // three secondary ones group at the
+                                        // trailing edge, and the primary is the
+                                        // only labelled and counted control
+                                        // among them.
+                                        //
+                                        // `flex-wrap` is structural, not
+                                        // cosmetic. Without it a flex item that
+                                        // grows -- the report panel, when it
+                                        // opens -- shrinks its siblings instead
+                                        // of moving to a new line, which
+                                        // measured as the download and share
+                                        // buttons squeezing from 36px to 29px.
+                                        <div class="mt-4 flex flex-wrap items-center gap-x-1 gap-y-2 rounded-lg border border-line bg-surface p-1.5">
                                             <LikeButton
                                                 id=s.id.clone()
                                                 initial_count=s.likes
                                                 initial_liked=s.liked_by_me
+                                                prominent=true
                                             />
+                                            // `ml-auto` puts this and everything
+                                            // after it on the trailing edge.
+                                            // Checked against style/tailwind.css
+                                            // rather than assumed: `.icon-btn`
+                                            // sets no margin, so this is not a
+                                            // same-property fight with the
+                                            // primitive.
                                             <a
-                                                class="icon-btn"
+                                                class="icon-btn ml-auto"
                                                 href=format!("/son/{}/download", s.id)
                                                 aria-label="Download"
                                                 title="Download"
@@ -297,7 +614,30 @@ pub fn SonDetail() -> impl IntoView {
                                                 url=page_url.clone()
                                                 title=s.title.clone()
                                             />
-                                            <ReportForm son_id=s.id.clone()/>
+                                            // Wrapped because this control is
+                                            // three different shapes: a lone
+                                            // <button> when closed, a whole
+                                            // panel when open, a <p> once it has
+                                            // been sent. `:has(fieldset)` is
+                                            // true only for the open panel --
+                                            // the reason picker is the only
+                                            // fieldset on this page -- and gives
+                                            // the wrapper flex-basis 100%, so
+                                            // the panel wraps to its own line at
+                                            // the bar's full width instead of
+                                            // being wedged into 208px beside the
+                                            // icons.
+                                            //
+                                            // This reads report.rs's markup from
+                                            // the outside. If that form ever
+                                            // stops using a fieldset the panel
+                                            // silently goes back to being
+                                            // squeezed in, with no compile error
+                                            // and nothing visibly wrong until
+                                            // someone opens it on a phone.
+                                            <div class="has-[fieldset]:basis-full has-[p]:basis-full">
+                                                <ReportForm son_id=s.id.clone()/>
+                                            </div>
                                         </div>
                                     </div>
                                 </article>
@@ -308,7 +648,7 @@ pub fn SonDetail() -> impl IntoView {
                         }
                     })
             }}
-        </Suspense>
+        </Transition>
     }
 }
 

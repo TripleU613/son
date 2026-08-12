@@ -53,6 +53,28 @@ pub fn SonCard(
         // `aspect-square` already fixes the box's height from its grid-assigned
         // width, so a skipped tile still reserves exactly the right space and
         // the scrollbar does not jump.
+        //
+        // The tile deliberately has NO entrance animation, and that is a
+        // decision rather than an oversight. Two reasons, both measurable:
+        //
+        // 1. An element at opacity 0 is not a valid LCP candidate in Chrome.
+        //    The tiles in the first row are the gallery's LCP element, so
+        //    fading them in would push measured LCP out by the full animation
+        //    duration -- and Cloudflare Web Analytics reports Core Web Vitals
+        //    from real phones, so that lands in production data, not here.
+        // 2. Under `content-visibility:auto` an off-screen subtree is skipped
+        //    entirely, and a skipped subtree may never start its animation. A
+        //    tile could then sit at its 0% frame forever: content that is in
+        //    the DOM, occupies its space, and cannot be seen.
+        //
+        // For the same reason, do not add `will-change: transform` to the
+        // image. It forces layer promotion on every tile in the grid, which is
+        // precisely the cost `content-visibility` is here to avoid paying.
+        // The image's `group-hover:scale-[1.03]` is the tile's whole motion
+        // budget, and it only runs on a tile someone is pointing at.
+        //
+        // Entrance motion belongs on the grid *wrapper* (opacity only) and on
+        // the skeletons, which is where density.rs puts it.
         <div class="card group relative aspect-square [content-visibility:auto] has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
             // The anchor covers the whole tile. `aria-label` carries the title,
             // because the link's only content is an image and the caption that
@@ -81,6 +103,14 @@ pub fn SonCard(
             // prompt -- ask the device what it can do, rather than guessing from
             // its width.
             //
+            // The reveal is a short rise rather than a bare fade, so the caption
+            // reads as arriving rather than materialising. That makes the
+            // touch-device rule a *pair*: the media query has to neutralise the
+            // transform as well as the opacity. Cover only the opacity and every
+            // phone gets a permanently visible caption sitting 4px below where
+            // it belongs, which is the kind of bug that looks like a rendering
+            // glitch and never gets traced back to a hover query.
+            //
             // `group-focus-within` keeps it reachable by keyboard, since tabbing
             // to the link or the tear button never triggers hover either.
             //
@@ -100,7 +130,7 @@ pub fn SonCard(
             // first, which is exactly what reveals it, and on touch it is
             // always visible. So there is no state in which it is invisible and
             // still clickable.
-            <span class="pointer-events-auto absolute right-2 top-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+            <span class="pointer-events-auto absolute right-2 top-2 translate-y-0.5 opacity-0 transition-[opacity,transform] duration-300 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100">
                 <LikeButton
                     id=son.id.clone()
                     initial_count=son.likes
@@ -109,7 +139,13 @@ pub fn SonCard(
                 />
             </span>
 
-            <div class="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-lg bg-gradient-to-t from-black/90 via-black/60 to-transparent px-2.5 pb-2.5 pt-10 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+            // No accent colour in the caption text, deliberately. This block
+            // sits over an arbitrary photograph, and the black scrim is the
+            // only reason the title is guaranteed legible at all -- yellow on
+            // an unknown image is a contrast ratio nobody can compute. The
+            // tile's warmth comes from the `.card` hover edge and the tear
+            // button, both of which sit on backgrounds whose colour is known.
+            <div class="pointer-events-none absolute inset-x-0 bottom-0 translate-y-1 rounded-b-lg bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2.5 pb-2.5 pt-10 opacity-0 transition-[opacity,transform] duration-300 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100">
                 <span class="block truncate text-[0.8125rem] font-semibold leading-snug text-ink">
                     {title}
                 </span>
