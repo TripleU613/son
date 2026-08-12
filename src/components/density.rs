@@ -191,6 +191,15 @@ pub fn RowSkeleton(#[prop(default = 6)] count: usize) -> impl IntoView {
 /// not reflow around the reader when the son resolves. The image block is
 /// square because `storage::square` crops every upload to 1024x1024, and it
 /// carries the same `68vh` cap the real figure does.
+///
+/// That cap is `w-full max-w-[68vh]` rather than a single `min(100%, 68vh)`,
+/// which would say the same thing in one value. `width: 100%` already cannot
+/// exceed the container, so capping it again at `68vh` is exactly equivalent --
+/// and it is equivalent in plain lengths. Release builds minify through
+/// lightningcss against `browserquery = "defaults"`, `min()` appears nowhere
+/// else in this codebase, and there is no way to check what that pass does to
+/// it from the dev server, which does not minify at all. Two proven properties
+/// beat one unverified function.
 #[component]
 pub fn DetailSkeleton() -> impl IntoView {
     view! {
@@ -198,7 +207,7 @@ pub fn DetailSkeleton() -> impl IntoView {
             class="flex flex-col gap-4 pb-4 min-[860px]:flex-row min-[860px]:items-start min-[860px]:justify-center min-[860px]:gap-8 min-[860px]:pb-6"
             aria-hidden="true"
         >
-            <div class="skeleton mx-auto aspect-square w-full max-w-[min(100%,68vh)] rounded-lg border border-line min-[860px]:mx-0"></div>
+            <div class="skeleton mx-auto aspect-square w-full max-w-[68vh] rounded-lg border border-line min-[860px]:mx-0"></div>
             <div class="min-w-0 min-[860px]:w-[320px] min-[860px]:flex-none">
                 <div class="skeleton h-7 w-3/4 rounded"></div>
                 <div class="skeleton mt-3 h-3.5 w-1/2 rounded"></div>

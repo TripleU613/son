@@ -70,6 +70,11 @@ WANTED = ("__Secure-1PSID", "__Secure-1PSIDTS")
 # Where entrypoint.sh put the browser's debugging endpoint. Loopback only.
 CDP_URL = os.environ.get("KEEPER_CDP_URL", "http://127.0.0.1:9222")
 
+# Failed re-attaches before the process gives up and lets Docker restart it. Three
+# rather than one, because a browser mid-navigation can refuse a connection briefly
+# without being gone.
+MAX_BROKEN = 3
+
 
 def _r2():
     """An S3 client pointed at R2, or None when R2 is not configured.
@@ -203,6 +208,21 @@ async def _park(page) -> None:
         log.debug("could not park the page: %s", e)
 
 
+async def _attach(pw):
+    """Attach to the browser entrypoint.sh started, and hand back a usable page.
+
+    Separate from `run` so a dead browser can be recovered mid-loop: Chromium
+    crashing or being closed leaves every Playwright handle permanently broken, and
+    without re-attaching the keeper would sit there failing every cycle until
+    somebody noticed.
+    """
+    browser = await pw.chromium.connect_over_cdp(CDP_URL)
+    ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    log.info("attached to the browser over CDP at %s", CDP_URL)
+    return ctx, page
+
+
 async def run() -> None:
     """One browser, always running, visible at /admin/browser.
 
@@ -220,15 +240,13 @@ async def run() -> None:
     restore_profile()
 
     async with async_playwright() as pw:
-        # Attach to the browser entrypoint.sh already started, rather than
-        # launching one. See the module docstring: a launched browser announces
-        # itself as automated and Google will not sign in to it.
-        browser = await pw.chromium.connect_over_cdp(CDP_URL)
-        ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        log.info("attached to the browser over CDP at %s", CDP_URL)
+        ctx, page = await _attach(pw)
         last: tuple[str, str] | None = None
         announced = False
+        # Consecutive cycles that could not even re-attach. Past the limit the
+        # process exits so Docker restarts it, which runs the entrypoint again and
+        # gets a fresh browser -- the one thing this cannot fix from inside.
+        broken = 0
 
         while True:
             try:
@@ -244,8 +262,27 @@ async def run() -> None:
                         IDLE_REFRESH_SECONDS,
                     )
                     announced = True
+                broken = 0
             except Exception as e:  # noqa: BLE001 - a bad cycle must not kill the loop
                 log.error("refresh cycle failed: %s", e)
+                # Most likely the browser went away, which leaves every handle
+                # permanently broken. Try to pick up a new one before giving up on
+                # the cycle.
+                try:
+                    ctx, page = await _attach(pw)
+                    broken = 0
+                except Exception as attach_error:  # noqa: BLE001
+                    broken += 1
+                    log.error(
+                        "could not re-attach (%d/%d): %s", broken, MAX_BROKEN, attach_error
+                    )
+                    if broken >= MAX_BROKEN:
+                        log.error(
+                            "browser unreachable %d times; exiting so the container "
+                            "restarts with a fresh one",
+                            broken,
+                        )
+                        raise SystemExit(1)
 
             if last is not None:
                 # Signed in: give the page's memory back and settle into the slow

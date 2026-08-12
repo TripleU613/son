@@ -39,8 +39,17 @@ websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1 &
 # The browser Playwright shipped, started as a normal browser. Asking Playwright
 # for the path rather than globbing /ms-playwright, so an image update that moves
 # it does not silently break this.
+# stderr silenced: this spins up a Playwright connection purely to read a path, and
+# tearing it down logs "Task was destroyed" and a TargetClosedError that look
+# exactly like a real failure in the container's logs. Asking Playwright rather than
+# globbing /ms-playwright, so an image update that moves the browser fails loudly
+# here instead of silently launching nothing.
 CHROME="$(python -c 'from playwright.sync_api import sync_playwright
-with sync_playwright() as p: print(p.chromium.executable_path)')"
+with sync_playwright() as p: print(p.chromium.executable_path)' 2>/dev/null)"
+if [ ! -x "$CHROME" ]; then
+  echo "keeper: could not locate the Chromium Playwright shipped" >&2
+  exit 1
+fi
 
 mkdir -p /tmp/profile
 # --remote-debugging-port on loopback only. Flags mirror the footprint work in

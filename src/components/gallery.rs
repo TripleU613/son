@@ -163,7 +163,19 @@ pub fn Gallery() -> impl IntoView {
         // standing in for are the same tiles. And the same density, so changing
         // sort in compact mode does not draw a cozy-shaped placeholder that
         // reflows the instant the cards land.
-        <Suspense fallback=move || view! { <GridSkeleton count=EAGER_TILES density=density.get()/> }>
+        //
+        // `get_untracked`, not `get`. A `Suspense` fallback is a `ViewFn` that
+        // Leptos calls to build a view, not a closure it re-runs inside a
+        // tracking context, so a plain `get` here subscribes to nothing and
+        // Leptos says so at runtime -- a console warning on every load of `/`
+        // that the four gate commands cannot see, because reactivity is checked
+        // when the wasm runs and not when it compiles. Untracked is also the
+        // honest read: `GridSkeleton` takes a plain `Density`, not a signal, and
+        // the fallback is on screen only until the resource resolves, so there
+        // is no window in which reacting to a density change would redraw
+        // anything. The real grid below reads `density` in a genuine `move ||`
+        // and does react.
+        <Suspense fallback=move || view! { <GridSkeleton count=EAGER_TILES density=density.get_untracked()/> }>
             {move || {
                 first
                     .get()
