@@ -320,7 +320,16 @@ async def _attach(pw):
     without re-attaching the keeper would sit there failing every cycle until
     somebody noticed.
     """
-    browser = await pw.chromium.connect_over_cdp(CDP_URL)
+    # 90s rather than Playwright's 180s default, and the number now means something:
+    # entrypoint.sh confirms the debugging port answers before this process starts and
+    # launches the browser on about:blank, so an attach takes about a second.
+    #
+    # It used to take 131 seconds, because the browser opened gemini.google.com and
+    # Playwright waits for the browser's targets -- i.e. behind that page load. That
+    # left ~50s of margin against the default, which a cold container spent, and the
+    # failure was three minutes of silence followed by a traceback with no cause.
+    # A tighter bound on an idle browser turns the same fault into a fast, legible one.
+    browser = await pw.chromium.connect_over_cdp(CDP_URL, timeout=90_000)
     ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
     page = ctx.pages[0] if ctx.pages else await ctx.new_page()
     log.info("attached to the browser over CDP at %s", CDP_URL)
@@ -346,6 +355,20 @@ async def run() -> None:
     # Chromium already has open, and it would never read those files.
     async with async_playwright() as pw:
         ctx, page = await _attach(pw)
+
+        # entrypoint.sh launches the browser on about:blank now, because attaching to
+        # one that is loading the Gemini SPA cost 131 seconds against a 180s timeout.
+        # Getting it onto Gemini is this side's job, and it has to happen whether or
+        # not there is a session: a blank window is not something a human can sign in
+        # through, and that window is the entire reason this runs with a display.
+        #
+        # Non-fatal, like every other navigation here. A failed page load must never
+        # be the reason the cookie loop below does not run.
+        try:
+            log.info("navigating to Gemini")
+            await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=120_000)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not open Gemini yet: %s", e)
 
         # A restored profile does not carry the session (see COOKIES_KEY), so the
         # stored jar is injected straight into the live browser. Only when it is not
