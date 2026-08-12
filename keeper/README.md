@@ -1,5 +1,7 @@
 # Session keeper
 
+> **This directory is not built on its own.** Its Dockerfile is gone: the app, this keeper, the Gemini sidecar and `cloudflared` are four processes in one image (see the repository root's `Dockerfile` and `deploy/supervisord.conf`). What lives here is the source that image copies.
+
 Keeps a logged-in Gemini browser session alive so screening stops dying, and
 pushes the current cookies to the sidecar whenever they rotate.
 

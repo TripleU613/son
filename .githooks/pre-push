@@ -93,7 +93,9 @@ def resolves(repo, digest):
 
 ok = True
 seen = set()
-for path in ("Dockerfile", "sidecar/Dockerfile", "keeper/Dockerfile", "docker-compose.yml"):
+# One Dockerfile now -- sidecar/ and keeper/ no longer build on their own. compose
+# is still read because it can pin an image too.
+for path in ("Dockerfile", "docker-compose.yml"):
     try:
         text = open(path).read()
     except OSError:
