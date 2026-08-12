@@ -73,12 +73,32 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2"/>
                 <meta name="theme-color" content="#08090b"/>
                 <AutoReload options=options.clone()/>
-                <HydrationScripts options=options.clone()/>
+                // The stylesheet goes FIRST, ahead of HydrationScripts, and the
+                // order is the whole point.
+                //
+                // HydrationScripts emits a `modulepreload` for the JS and a
+                // `<link rel="preload" as="fetch">` for the wasm. Measured in
+                // production: 8KB of JS and **569KB of wasm** on the wire, versus
+                // 7KB for the stylesheet. `as="fetch"` is a High-priority hint,
+                // so with this component first the browser opened the 569KB
+                // download before it had parsed far enough to discover the CSS
+                // link at all -- and then painted the server-rendered HTML
+                // unstyled while the wasm monopolised the connection. That is the
+                // "it flashes plain HTML for a second on load" report, and it
+                // gets worse the slower the network, which is exactly backwards.
+                //
+                // Nothing about first paint needs the wasm: this route is
+                // SsrMode::Async, so the HTML arrives complete and the wasm only
+                // makes it interactive. The stylesheet is the one asset the first
+                // paint genuinely cannot do without, so it is the one that gets
+                // discovered first.
+                //
                 // Emitted here rather than as a <Stylesheet> inside App: the
                 // hashed filename lives in a file next to the binary, so this
                 // needs LeptosOptions, which only exists server-side. See
                 // `hash-files` in Cargo.toml for why the hash matters.
                 <HashedStylesheet options=options.clone() id="leptos"/>
+                <HydrationScripts options=options.clone()/>
                 <MetaTags/>
                 // Last in <head> and deferred, so analytics never delays first
                 // paint. `data-cf-beacon` is Cloudflare's own attribute contract.
