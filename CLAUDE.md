@@ -95,6 +95,22 @@ of those can happen now.
   127.0.0.1 via `extra_hosts`. Drop those once the dashboard says loopback.
 - `supervisorctl -c /etc/supervisor/supervisord.conf restart sidecar` restarts one
   process without restarting the container.
+- **The keeper's browser must launch on `about:blank`.** `connect_over_cdp` waits for
+  the browser's targets, so attaching to one that is loading gemini.google.com cost
+  **131s** against Playwright's 180s default — ~50s of margin that a cold container
+  spends, and then the keeper crashes. Measured on the host: the debugging port opens
+  ~2s after launch when idle but took **82s** on a cold start with the sidecar
+  initialising, and the attach itself took 52s. `session_keeper` navigates to Gemini
+  after attaching, which is what keeps the sign-in window usable.
+- **Anything the keeper's entrypoint starts, it must kill first.** Supervisor restarts
+  the script; the script backgrounds Xvfb, x11vnc, websockify and Chromium. Without
+  the cleanup on entry and the EXIT/INT/TERM trap, four restarts took the container
+  from 541MB to 1.13GB and 22 Chromium processes, heading for an OOM that takes the
+  website with it.
+- Supervisor logs every line twice (`logfile=/dev/stdout` plus nodaemon's console).
+  `sort -u` before counting anything in `docker logs`, or one spawn reads as two.
+- `pgrep -f`/`grep` inside `docker exec` matches the query's own command line. Use
+  `ps -eo args | grep -c "[X]vfb"`, or a browser count reads three when it is one.
 - The deploy waits for the container to report healthy and **puts the previous image
   back if it does not** (`deploy/remote-deploy.sh`). `docker compose up` succeeds
   when a container *starts*, which is a much weaker claim than "the site answers".
