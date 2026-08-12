@@ -1,26 +1,16 @@
-# bulky-server's SSH host key, fetched 2026-08-11 via
-#   ssh-keyscan -t ed25519 bulky-server
-# This is public information (a host key is meant to be shared), pinned here
-# so the CI deploy step verifies it rather than trusting whatever answers on
-# the tailnet at deploy time. Re-fetch and update if bulky-server's Tailscale
-# SSH host key ever legitimately rotates.
+# jtech, the deploy target, keyed on its tailnet name.
 #
-# Both entries are the same key: Tailscale SSH presents one host key, and the
-# deploy connects by short name while the tailnet may resolve either.
-100.88.11.83 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
-bulky-server ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
-bulky-server.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu/4B8KOLYfX6Q68TPSCRBZpY/9vFLPQB
-
-# debiantripleu, kept for when it comes back. Fetched 2026-08-11 the same way.
-# Harmless to pin an extra host: known_hosts is a list of who is trusted, and
-# the deploy only ever connects to the host named in the workflow.
-100.123.135.127 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
-debiantripleu ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
-debiantripleu.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
-
-# The current deploy target's host key is NOT here. It lives in the
-# DEPLOY_HOST_KEY secret, because a known_hosts line begins with the address it
-# belongs to and that address is a Cloudflare-proxied origin -- publishing it
-# would let anyone reach the origin directly and skip the proxy. The entries
-# above are tailnet addresses, which are reachable only from inside the tailnet
-# and are safe to commit.
+# Read with `ssh-keyscan -t ed25519 jtech` over the tailnet, which needs no
+# authentication, and byte-for-byte identical to the key that was previously
+# pinned against jtech's public address -- the same sshd host key -- so this is a
+# verified pin rather than trust-on-first-use.
+#
+# Safe to commit where the public address was not: this name resolves only inside
+# the tailnet, and a host key is public by construction. The thing worth hiding was
+# the origin address of a box that fronts unrelated services behind a Cloudflare
+# proxy, not the fact that a machine called jtech has an ed25519 host key.
+#
+# jtech answers :22 with Tailscale SSH (`remote software version Tailscale`), so
+# the connecting node's tailnet identity is the credential and this pin covers the
+# host side of that exchange.
+jtech ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL3pyAaFFNm2isipUIj0OAHgAhQhf7WCpi8PmFcorNC3

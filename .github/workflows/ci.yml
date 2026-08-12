@@ -125,37 +125,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # jtech is reached over the public internet at a static address, not over
-      # the tailnet, and that is forced rather than chosen: jtech carries
-      # `tag:isolated` and the tailnet ACL does not permit `tag:ci` to open SSH
-      # to it. bulky-server needed no key at all -- it had no public inbound port
-      # and ran Tailscale SSH, where the runner's own tailnet identity WAS the
-      # credential. Here the credential is an ed25519 keypair created for this
-      # job and nothing else.
+      # jtech is reached over the tailnet, not the public internet, and needs no
+      # key: it runs Tailscale SSH, so the connecting node's own tailnet identity
+      # is the credential and the ACL decides whether it may connect as root.
+      # Exactly how bulky-server worked before the move.
       #
-      # Grant `tag:ci -> tag:isolated:22` in the tailnet ACL and this can go back
-      # to being keyless.
-      - name: load the deploy key and pin jtech's host key
-        # The key goes through `env:` rather than being interpolated into the
-        # script body, so its contents are never substituted into a shell
-        # command line.
+      # This replaced an ed25519 keypair over public :22, which broke the moment
+      # jtech's operator locked inbound SSH to the tailnet -- correctly, since a
+      # public :22 open to GitHub's wide, rotating runner ranges is the vector that
+      # lockdown exists to close. Reopening it was the wrong fix.
+      #
+      # Requires one tailnet ACL grant, and it is not optional: `tag:ci` must be
+      # allowed to reach `tag:isolated` on 22 in `acls`, *and* listed in an `ssh`
+      # rule with `action: "accept"`. "check" would demand an interactive browser
+      # re-auth, which no CI job can satisfy.
+      - uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_CI_AUTHKEY }}
+          tags: tag:ci
+
+      - name: pin jtech's host key
+        # Committed in deploy/known_hosts, keyed on the tailnet name. The address
+        # that had to stay out of this repo was jtech's *public* one -- it fronts
+        # unrelated services behind a Cloudflare proxy, and publishing it hands a
+        # reader a way around that proxy. A tailnet name and a public host key give
+        # nobody anything: the name resolves only inside the tailnet, and a host
+        # key is public by construction.
         #
-        # The host key is committed in deploy/known_hosts and was cross-checked
-        # against /etc/ssh/ssh_host_ed25519_key.pub read on the box itself, so
-        # this is a verified pin. Trust-on-first-use inside an automated pipeline
-        # reachable over the public internet is exactly what host-key checking
-        # exists to prevent.
-        env:
-          DEPLOY_KEY: ${{ secrets.JTECH_SSH_KEY }}
-          # "<address> ssh-ed25519 AAAA...", the one line ssh-keyscan prints.
-          # In a secret rather than deploy/known_hosts because the line begins
-          # with the origin address -- see DEPLOY_HOST below.
-          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        # Read with `ssh-keyscan` over the tailnet, which needs no authentication,
+        # and it matches the key that was previously pinned for the public address
+        # byte for byte -- the same sshd host key, so this is a verified pin rather
+        # than trust-on-first-use.
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$DEPLOY_HOST_KEY" >> ~/.ssh/known_hosts
           cat deploy/known_hosts >> ~/.ssh/known_hosts
 
       - name: deploy
@@ -167,13 +169,15 @@ jobs:
         # from it, so a new variable in docker-compose.yml only needs adding
         # here once, not once per command.
         env:
-          # A secret rather than a literal, and not because it is a credential
-          # -- it is not. It is the ORIGIN address of a box whose public names
-          # all sit behind a Cloudflare proxy, including a Discourse forum that
-          # has nothing to do with this project. Committing it hands anyone who
-          # reads this repository a way to skip the proxy and reach the origin
-          # directly, which is the one thing proxying that forum was for.
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          # The tailnet name, committed rather than held in a secret.
+          #
+          # What had to stay out of this repo was jtech's *public* address: it is
+          # the origin of a box whose public names all sit behind a Cloudflare
+          # proxy, including a Discourse forum unrelated to this project, and
+          # publishing it hands any reader a way around that proxy. That reasoning
+          # does not extend to a tailnet name, which resolves only inside the
+          # tailnet and reaches nothing without a node in it.
+          DEPLOY_HOST: jtech
           SON_IMAGE: ${{ needs.build.outputs.image }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
