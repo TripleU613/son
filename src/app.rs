@@ -8,9 +8,7 @@ use crate::api::current_user;
 use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
-use crate::components::icon::{
-    Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound,
-};
+use crate::components::icon::{Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound};
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
 use crate::components::search::SearchPage;
