@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use leptos_meta::{Meta, Title};
 use leptos_router::hooks::use_query_map;
 
-use crate::api::search_sons;
+use crate::api::{encode_query, search_sons};
 use crate::components::card::SonCard;
 use crate::components::density::SearchSkeleton;
 use crate::components::empty::{EmptyState, ErrorState};
@@ -61,16 +61,44 @@ pub fn SearchPage() -> impl IntoView {
                 results
                     .get()
                     .map(|res| match res {
+                        // Retries this search rather than sending the visitor to
+                        // the gallery: ErrorState's default href is "/", so the
+                        // button said "Try again" and did something else.
                         Err(_) => {
-                            view! { <ErrorState message="Something went wrong."/> }.into_any()
+                            view! {
+                                <ErrorState
+                                    message="Couldn't run that search."
+                                    retry_href=format!("/search?q={}", encode_query(&q()))
+                                />
+                            }
+                                .into_any()
                         }
-                        Ok(sons) if sons.is_empty() => {
+                        // "No results" is the wrong sentence for a page nobody
+                        // has searched on yet -- /search with no query is
+                        // reachable from the 404 page and from a bare bookmark,
+                        // and it used to answer a question that had not been
+                        // asked, with a "Clear search" link that cleared nothing.
+                        Ok(_) if q().trim().is_empty() => {
                             view! {
                                 <EmptyState
                                     icon=LuSearch
-                                    message="No results."
+                                    message="Search by title or tag using the box above."
                                     action_href="/"
-                                    action_label="Clear search"
+                                    action_label="Browse every son"
+                                />
+                            }
+                                .into_any()
+                        }
+                        Ok(sons) if sons.is_empty() => {
+                            view! {
+                                // The action says where it goes, rather than
+                                // "Clear search" -- it leaves this page for the
+                                // gallery, which is not what clearing a box does.
+                                <EmptyState
+                                    icon=LuSearch
+                                    message="Nothing matched that."
+                                    action_href="/"
+                                    action_label="Browse every son"
                                 />
                             }
                                 .into_any()

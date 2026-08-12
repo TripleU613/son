@@ -53,6 +53,38 @@ async fn is_admin(headers: &HeaderMap) -> bool {
     )
 }
 
+/// The refusal for a non-admin, as a page rather than two words.
+///
+/// `page()` is something a person navigates to, and `text/plain` "admin only"
+/// reads as a crash: no title, no styling, and no way onward. The same body goes
+/// out for the asset and socket routes -- those are fetched by code, which
+/// ignores it, and having one definition means the human-facing route can never
+/// drift back to the bare string.
+///
+/// Not shared with `/admin`'s Leptos denial: this route is outside the router
+/// (that is why the link to it needs `rel="external"`), so it has no access to
+/// the app's components, and duplicating a paragraph is cheaper than routing a
+/// static page through hydration.
+fn forbidden() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Html(
+            r#"<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>no access — son collection</title>
+<style>body{background:#08090b;color:#f4f4f5;font:15px/1.6 system-ui;margin:0;
+display:grid;place-items:center;min-height:100dvh;text-align:center;padding:2rem}
+h1{font-size:1.2rem;margin:0 0 .5rem}p{margin:0 0 1rem;color:#a1a1aa;max-width:36ch}
+a{color:#ffcc33}</style>
+<div><h1>You don't have access to this</h1>
+<p>The sign-in browser is for admins only. Nothing is broken &mdash; this account
+just isn't one.</p>
+<p><a href="/">Back to the collection</a></p></div>"#,
+        ),
+    )
+        .into_response()
+}
+
 /// A short page that frames noVNC, plus the one instruction that matters.
 ///
 /// Server-rendered here rather than as a Leptos route: it is a frame around a
@@ -60,7 +92,7 @@ async fn is_admin(headers: &HeaderMap) -> bool {
 /// shipping it through the app's router.
 pub async fn page(headers: HeaderMap) -> Response {
     if !is_admin(&headers).await {
-        return (StatusCode::FORBIDDEN, "admin only").into_response();
+        return forbidden();
     }
 
     let reachable = reqwest::Client::new()
@@ -184,7 +216,7 @@ document.getElementById('kbd').onclick = () => {
 /// Proxy noVNC's static assets.
 pub async fn asset(headers: HeaderMap, Path(path): Path<String>) -> Response {
     if !is_admin(&headers).await {
-        return (StatusCode::FORBIDDEN, "admin only").into_response();
+        return forbidden();
     }
 
     // The path comes from a wildcard route, so it cannot escape the prefix, and
@@ -226,7 +258,7 @@ pub async fn asset(headers: HeaderMap, Path(path): Path<String>) -> Response {
 /// Relay the VNC WebSocket.
 pub async fn websocket(headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     if !is_admin(&headers).await {
-        return (StatusCode::FORBIDDEN, "admin only").into_response();
+        return forbidden();
     }
     // The subprotocol matters: websockify only speaks binary once "binary" is
     // negotiated, and noVNC will not talk to it otherwise.

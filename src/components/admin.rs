@@ -1,13 +1,15 @@
 use leptos::prelude::*;
 use leptos_meta::Title;
+use leptos_router::components::A;
 
 use crate::api::{
     admin_delete_son, admin_flagged_sons, admin_screening_status, admin_set_gemini_cookies,
     admin_set_public,
 };
 use crate::components::empty::{EmptyState, ErrorState};
-use crate::components::icon::{Ico, LuCheck, LuCircleAlert, LuRefreshCw};
-use crate::models::FlaggedSon;
+use crate::components::icon::{Ico, LuCheck, LuCircleAlert, LuRefreshCw, LuUserRound};
+use crate::components::sign_in::SignInLink;
+use crate::models::{AdminQueue, FlaggedSon};
 
 /// A destructive action, written out in full rather than as `btn-quiet` plus
 /// overrides.
@@ -43,10 +45,11 @@ pub fn Admin() -> impl IntoView {
 
     view! {
         <Title text="admin — son collection"/>
-        <ScreeningPanel/>
-        // Sentence case, like "Leaderboard" and "Search". This was the only
-        // page title on the site in lowercase.
-        <h1 class="m-0 mb-4 mt-8 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"Report queue"</h1>
+        // Nothing above the gate. The screening panel and the heading used to
+        // render before the queue resolved, which meant a signed-out visitor
+        // got the Gemini session controls and "Report queue" with a refusal
+        // underneath -- the page admitting it exists and then declining. Both
+        // now live inside the one arm that is actually allowed to see them.
 
         <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"loading queue…"</p> }>
             {move || {
@@ -69,17 +72,66 @@ pub fn Admin() -> impl IntoView {
                             }
                                 .into_any()
                         }
-                        Ok(rows) if rows.is_empty() => {
-                            view! { <EmptyState icon=LuCheck message="Nothing flagged right now."/> }
+                        // Not signed in at all: offer the way in rather than a
+                        // refusal. `rel="external"` because /auth/google/login is an
+                        // Axum route and leptos_router would otherwise intercept the
+                        // click and render its own 404.
+                        Ok(AdminQueue::SignInRequired) => {
+                            view! {
+                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
+                                    <span class="text-ink-3"><Ico icon=LuUserRound size=26/></span>
+                                    <h2 class="m-0 text-[1.1rem] font-semibold">"Sign in to see this"</h2>
+                                    <p class="m-0 max-w-[34ch] text-[0.9rem] text-ink-2">
+                                        "The report queue is only visible to admins."
+                                    </p>
+                                    <SignInLink attr:class="btn">"Sign in"</SignInLink>
+                                </section>
+                            }
                                 .into_any()
                         }
-                        Ok(rows) => {
+                        // Signed in, but not an admin. Says so plainly: this is a
+                        // decision about the account, not a fault, and the previous
+                        // page rendered "admin access required" in red as though
+                        // something had gone wrong.
+                        Ok(AdminQueue::Denied) => {
                             view! {
-                                <div class="grid gap-3.5">
-                                    <For each=move || rows.clone() key=|f| f.son.id.clone() let:flagged>
-                                        <AdminRow flagged=flagged on_change=move || set_refresh.update(|n| *n += 1)/>
-                                    </For>
-                                </div>
+                                <section class="flex min-h-[46vh] flex-col items-center justify-center gap-3 text-center">
+                                    <span class="text-ink-3"><Ico icon=LuCircleAlert size=26/></span>
+                                    <h2 class="m-0 text-[1.1rem] font-semibold">"You don't have access to this"</h2>
+                                    <p class="m-0 max-w-[38ch] text-[0.9rem] text-ink-2">
+                                        "This account isn't an admin, so the report queue isn't yours to see. Nothing is broken."
+                                    </p>
+                                    <A href="/" attr:class="btn">"Back to the collection"</A>
+                                </section>
+                            }
+                                .into_any()
+                        }
+                        Ok(AdminQueue::Queue(rows)) => {
+                            // Built before the wrapper rather than with a
+                            // `<Show>`: Show's children have to be `Fn`, and the
+                            // `For` below consumes `rows`, so a Show here fails
+                            // to compile for reasons that have nothing to do
+                            // with the empty state.
+                            let queue = if rows.is_empty() {
+                                view! { <EmptyState icon=LuCheck message="Nothing flagged right now."/> }
+                                    .into_any()
+                            } else {
+                                view! {
+                                    <div class="grid gap-3.5">
+                                        <For each=move || rows.clone() key=|f| f.son.id.clone() let:flagged>
+                                            <AdminRow flagged=flagged on_change=move || set_refresh.update(|n| *n += 1)/>
+                                        </For>
+                                    </div>
+                                }
+                                    .into_any()
+                            };
+                            view! {
+                                <ScreeningPanel/>
+                                // Sentence case, like "Leaderboard" and "Search".
+                                <h1 class="m-0 mb-4 mt-8 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">
+                                    "Report queue"
+                                </h1>
+                                {queue}
                             }
                                 .into_any()
                         }
@@ -95,6 +147,7 @@ fn AdminRow(
     on_change: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let son = flagged.son;
+    let has_reports = !flagged.reports.is_empty();
     let (confirming_delete, set_confirming_delete) = signal(false);
     let is_public = son.is_public;
     let id_for_toggle = son.id.clone();
@@ -149,6 +202,19 @@ fn AdminRow(
                         {if son.is_public { "visible" } else { "hidden" }}
                     </span>
                 </div>
+                // A son with no reports is in this queue because screening held
+                // it -- `db::flagged_sons` selects `reports > 0 OR is_public = 0`.
+                // Without this line those rows were a hidden son, an empty list,
+                // and no stated reason, which reads as a bug in the queue rather
+                // than as the queue working.
+                {(!has_reports)
+                    .then(|| {
+                        view! {
+                            <p class="m-0 text-[0.85rem] text-ink-2">
+                                "Held by screening, not reported \u{2014} it was uploaded while Gemini was unavailable."
+                            </p>
+                        }
+                    })}
                 <ul class="m-0 pl-5 text-[0.85rem] text-ink-2">
                     <For
                         each={
@@ -172,7 +238,7 @@ fn AdminRow(
                             toggle.dispatch(());
                         }
                     >
-                        {if is_public { "hide" } else { "unhide" }}
+                        {if is_public { "Hide" } else { "Unhide" }}
                     </button>
                     <Show
                         when=move || confirming_delete.get()
@@ -182,7 +248,7 @@ fn AdminRow(
                                     class=BTN_DANGER
                                     on:click=move |_| set_confirming_delete.set(true)
                                 >
-                                    "delete"
+                                    "Delete"
                                 </button>
                             }
                         }
@@ -194,7 +260,7 @@ fn AdminRow(
                                 delete.dispatch(());
                             }
                         >
-                            "really delete? (no undo)"
+                            "Really delete? No undo"
                         </button>
                         // `btn-quiet`, like every other secondary control.
                         // Cancel was a bare unstyled <button> -- no height, no
@@ -205,7 +271,7 @@ fn AdminRow(
                             class="btn-quiet"
                             on:click=move |_| set_confirming_delete.set(false)
                         >
-                            "cancel"
+                            "Cancel"
                         </button>
                     </Show>
                 </div>
@@ -316,13 +382,21 @@ fn ScreeningPanel() -> impl IntoView {
                 }}
             </Suspense>
 
+            // A button, not a phrase with a link in it. This is the control that
+            // gets used from a phone -- open the remote browser, sign in to
+            // Google, hand the site fresh cookies -- and as inline underlined
+            // text it was a 161x16 target, well under the 24px minimum, sitting
+            // in the middle of a sentence.
+            //
             // A plain <a>, not <A>: /admin/browser is an Axum route outside the
             // Leptos router, so a client-side navigation would 404 against it.
+            // rel="external" is what stops the router from trying.
             <p class="mt-3 text-[0.85rem] text-ink-2">
-                "Signing in: "
-                <a class="text-accent underline" href="/admin/browser">"open the sign-in browser"</a>
-                " and sign in to Google there, or paste cookies below."
+                "Sign in to Google in the remote browser, or paste cookies below."
             </p>
+            <a class="btn mt-2 self-start" rel="external" href="/admin/browser">
+                "Open the sign-in browser"
+            </a>
 
             <form
                 class="mt-3 grid gap-2"

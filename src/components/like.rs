@@ -1,9 +1,9 @@
 use leptos::prelude::*;
-use leptos_router::hooks::use_location;
 
 use crate::components::icon::{Ico, LuDroplet};
 
-use crate::api::{like_son, sign_in_href, LikeOutcome};
+use crate::api::{like_son, LikeOutcome};
+use crate::components::sign_in::SignInLink;
 
 /// The "cry over this son" button -- the site's like/favourite action.
 ///
@@ -47,9 +47,6 @@ pub fn LikeButton(
     // and the whole thing stops compiling with an error that points at the view
     // macro rather than at this line.
     let son_id = StoredValue::new(id);
-    // Just the memo, not the whole `Location`: this is read to build the
-    // `return_to`, and a `Memo<String>` is `Copy` where `Location` is not.
-    let pathname = use_location().pathname;
 
     let click = move |ev: leptos::ev::MouseEvent| {
         // Kept as a guard, not as a fix for a live bug: this button no longer
@@ -181,17 +178,17 @@ pub fn LikeButton(
             // page, sign-in is a full redirect, and the middle-click and
             // open-in-new-tab that visitors expect of one come free. Same class
             // string, so the control does not jump when it changes job.
-            <a
-                class=class
-                href=move || sign_in_href(&pathname.get())
-                aria-label="Sign in to cry over this son"
-                title="Sign in to cry over this son"
-            >
+            //
+            // Via SignInLink because this anchor was missing rel="external",
+            // which meant the router intercepted the click and rendered the 404
+            // page: the one control offering a way out of "you need an account"
+            // led nowhere.
+            <SignInLink label="Sign in to cry over this son" attr:class=class>
                 <span class="inline-flex">
                     <Ico icon=LuDroplet size=15/>
                 </span>
                 <span class="tabular-nums">{move || count.get()}</span>
-            </a>
+            </SignInLink>
         </Show>
     }
 }

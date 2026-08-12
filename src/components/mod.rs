@@ -15,5 +15,6 @@ pub mod report;
 pub mod search;
 pub mod search_box;
 pub mod share;
+pub mod sign_in;
 pub mod sort_chips;
 pub mod upload;

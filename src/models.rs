@@ -128,6 +128,32 @@ impl Sort {
     }
 }
 
+/// What a visitor is allowed to see of `/admin`.
+///
+/// Three states rather than a `Result`, for the same reason `LikeOutcome` has
+/// `SignInRequired`: "not signed in" and "signed in but not an admin" need different
+/// pages -- one offers a sign-in link, the other says plainly that this account does
+/// not have access -- and folded into a `ServerFnError` they could only be told apart
+/// by matching on message text. The old page rendered the raw error, so a visitor got
+/// "admin access required" in red as though something had broken.
+/// Adjacently tagged (`tag` + `content`), not internally tagged. serde cannot
+/// internally-tag a newtype variant that holds a sequence -- it needs somewhere to
+/// put the `state` key, and a JSON array has no keys -- and it does not say so
+/// until it serializes. `tag = "state"` alone compiled, server-rendered correctly,
+/// and then panicked inside `leptos_server`'s resource serializer while preparing
+/// the value for hydration, so `/admin` returned a complete page that never
+/// finished hydrating and hung the browser with no error on screen. Verified by
+/// `admin_queue_round_trips` below rather than by reading serde's docs again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "queue", rename_all = "snake_case")]
+pub enum AdminQueue {
+    /// Nobody is signed in.
+    SignInRequired,
+    /// Signed in, but this account is not an admin.
+    Denied,
+    Queue(Vec<FlaggedSon>),
+}
+
 /// Whether screening is actually working, as shown on the admin page.
 ///
 /// `usable` counts accounts answering right now, which is not the same as
@@ -262,4 +288,51 @@ pub enum UploadResult {
     Error {
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every variant has to survive a round trip through JSON, because that is
+    /// what a server fn does with it and a failure there is not a compile error:
+    /// `#[serde(tag = "state")]` type-checked fine and then panicked at runtime
+    /// on the one variant with a `Vec` in it, mid-hydration, on the admin page
+    /// only. A serialize call in a test is two lines and catches it at the
+    /// bottom of the pyramid instead of in a browser.
+    #[test]
+    fn admin_queue_round_trips() {
+        let son = FlaggedSon {
+            son: Son {
+                id: "id".into(),
+                slug: "slug".into(),
+                title: "a son".into(),
+                orig_url: "https://example.invalid/i.png".into(),
+                thumb_url: "https://example.invalid/t.png".into(),
+                width: 1024,
+                height: 1024,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                is_public: false,
+                reports: 3,
+                likes: 0,
+                liked_by_me: false,
+                uploader: None,
+            },
+            reports: vec![ReportDetail {
+                reason: "not_son".into(),
+                message: Some("not a son".into()),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            }],
+        };
+        for value in [
+            AdminQueue::SignInRequired,
+            AdminQueue::Denied,
+            AdminQueue::Queue(vec![]),
+            AdminQueue::Queue(vec![son]),
+        ] {
+            let json = serde_json::to_string(&value).expect("serializes");
+            let back: AdminQueue = serde_json::from_str(&json).expect("deserializes");
+            assert_eq!(value, back, "round trip changed the value: {json}");
+        }
+    }
 }

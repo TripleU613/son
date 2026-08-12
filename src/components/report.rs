@@ -1,9 +1,9 @@
 use leptos::prelude::*;
-use leptos_router::hooks::use_location;
 
 use crate::components::icon::{Ico, LuFlag};
 
-use crate::api::{report_son, sign_in_href, ReportOutcome};
+use crate::api::{report_son, ReportOutcome};
+use crate::components::sign_in::SignInLink;
 use crate::models::ReportReason;
 
 /// The "this is not a son" flow: closed by default, opens into a reason
@@ -31,7 +31,6 @@ pub fn ReportForm(
     // `StoredValue`, because the branch that renders the trigger is a `Fn`
     // closure and has to be able to produce this string more than once.
     let trigger_class = StoredValue::new(class);
-    let pathname = use_location().pathname;
 
     let report = Action::new(move |(reason, message): &(ReportReason, String)| {
         let id = son_id.clone();
@@ -100,13 +99,16 @@ pub fn ReportForm(
                                     }
                                 >
                                     {move || {
-                                        if report.pending().get() { "flagging…" } else { "submit report" }
+                                        if report.pending().get() { "Sending…" } else { "Send report" }
                                     }}
                                 </button>
-                                <button
-                                    class="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:text-danger"
-                                    on:click=move |_| set_open.set(false)
-                                >
+                                // btn-quiet, like every other secondary control.
+                                // This was a bare unstyled <button> -- no height,
+                                // no padding, no border -- next to a real one, so
+                                // the way out of the form was the hardest thing in
+                                // it to hit. The same flaw was fixed in the admin
+                                // row's cancel; this was the other instance.
+                                <button class="btn-quiet" on:click=move |_| set_open.set(false)>
                                     "Cancel"
                                 </button>
                             </div>
@@ -116,7 +118,7 @@ pub fn ReportForm(
                     .into_any()
             }
             Some(Ok(ReportOutcome::Recorded)) => {
-                view! { <p class="text-[0.9rem] text-ok">"Flagged. Someone will look."</p> }
+                view! { <p class="text-[0.9rem] text-ok">"Reported. Someone will look."</p> }
                     .into_any()
             }
             // Nothing was written, so this must not read as done. A link, not a
@@ -124,12 +126,9 @@ pub fn ReportForm(
             // one click from being able to send it.
             Some(Ok(ReportOutcome::SignInRequired)) => {
                 view! {
-                    <a
-                        class="text-[0.9rem] text-accent underline underline-offset-2 hover:text-accent-hover"
-                        href=move || sign_in_href(&pathname.get())
-                    >
+                    <SignInLink attr:class="text-[0.9rem] text-accent underline underline-offset-2 hover:text-accent-hover">
                         "Sign in to report this"
-                    </a>
+                    </SignInLink>
                 }
                     .into_any()
             }

@@ -65,10 +65,26 @@ pub fn Leaderboard() -> impl IntoView {
                     .get()
                     .map(|res| match res {
                         Err(_) => {
-                            view! { <ErrorState message="Something went wrong."/> }.into_any()
+                            view! {
+                                <ErrorState
+                                    message="Couldn't tally the leaderboard."
+                                    retry_href="/leaderboard"
+                                />
+                            }
+                                .into_any()
                         }
+                        // An empty leaderboard is an invitation: the way to get
+                        // on it is to upload, and this state used to be a
+                        // sentence with nowhere to go.
                         Ok(rows) if rows.is_empty() => {
-                            view! { <EmptyState icon=LuTrophy message="No contributors yet."/> }
+                            view! {
+                                <EmptyState
+                                    icon=LuTrophy
+                                    message="No contributors yet."
+                                    action_href="/upload"
+                                    action_label="Be the first"
+                                />
+                            }
                                 .into_any()
                         }
                         Ok(rows) => {

@@ -47,14 +47,24 @@ async fn current_actor() -> Option<String> {
 /// re-checked as one server-side in `oauth_route::login` — the encoding here is
 /// only to stop a path with a `?`, `&` or `#` in it truncating the query value.
 pub fn sign_in_href(return_to: &str) -> String {
-    let encoded: String = return_to
+    format!("/auth/google/login?return_to={}", encode_query(return_to))
+}
+
+/// Percent-encode a value for a query string.
+///
+/// `/` is left alone because every current caller encodes a same-origin path and
+/// escaping the separators makes those unreadable in a location bar for no gain.
+/// Public so the search page can rebuild its own URL for a retry link -- it had
+/// no way to, so its "Try again" went to the gallery instead of re-running the
+/// search it was offering to retry.
+pub fn encode_query(value: &str) -> String {
+    value
         .chars()
         .map(|c| match c {
             'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' => c.to_string(),
             _ => format!("%{:02X}", c as u32),
         })
-        .collect();
-    format!("/auth/google/login?return_to={encoded}")
+        .collect()
 }
 
 /// One page of the gallery. `cursor` is the previous page's `next_cursor`.
@@ -84,7 +94,17 @@ pub async fn get_son(id: String) -> Result<Option<Son>, ServerFnError> {
     // A hidden son must 404 by direct link too, not just vanish from the grid.
     // Direct links are how these spread, so leaving them reachable would make
     // the auto-hide safety valve decorative.
-    Ok(son.filter(|s| s.is_public))
+    //
+    // Admins excepted, and not as a convenience: every row in the report queue
+    // links to its son, and for a hidden one that link 404'd -- so the one person
+    // who has to look at a son before deciding whether to delete it was the one
+    // person who could not. The check is here rather than in the component
+    // because this is where the answer is decided; a client-side "am I an admin"
+    // would just be a request for the same data with the gate removed.
+    if son.as_ref().is_some_and(|s| !s.is_public) && require_admin().await.is_err() {
+        return Ok(None);
+    }
+    Ok(son)
 }
 
 #[server(TotalSons, "/api")]
@@ -243,11 +263,28 @@ pub async fn report_son(
     Ok(ReportOutcome::Recorded)
 }
 
+/// The report queue, or the reason it is not being shown.
+///
+/// Returns the refusal as data rather than as an error: the page has to be able to
+/// tell "sign in" from "your account cannot see this", and an error string cannot be
+/// matched on safely. The gate itself is unchanged -- `require_admin` still decides,
+/// and every mutating admin fn below still calls it.
 #[server(AdminFlaggedSons, "/api")]
-pub async fn admin_flagged_sons() -> Result<Vec<crate::models::FlaggedSon>, ServerFnError> {
-    require_admin().await?;
+pub async fn admin_flagged_sons() -> Result<crate::models::AdminQueue, ServerFnError> {
+    use crate::models::AdminQueue;
+
+    let user = crate::auth::current_user(cookie_header().await.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    match user {
+        None => return Ok(AdminQueue::SignInRequired),
+        Some(u) if !u.is_admin => return Ok(AdminQueue::Denied),
+        Some(_) => {}
+    }
+
     crate::db::flagged_sons()
         .await
+        .map(AdminQueue::Queue)
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 

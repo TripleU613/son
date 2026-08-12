@@ -168,6 +168,46 @@ every link shared before slugs existed still resolves. Build links from
 `son.slug`, never `son.id`. `db::unique_slug` appends -2, -3 on collision and the
 UNIQUE index is the real guard.
 
+## Two routers, and the anchors that fall between them
+
+`main.rs` owns the Axum routes (`/auth/*`, `/admin/browser`, `/son/:slug/download`,
+`/api/*`, `/embed/*`, `/oembed`, `robots.txt`, `sitemap.xml`, `llms.txt`).
+Everything else is a Leptos route in `app.rs`.
+
+`leptos_router` intercepts **every** same-origin `<a>` click and resolves it
+against its own table unless the anchor has `download` or `rel="external"`
+(`leptos_router`'s `location/mod.rs`). So a plain anchor to an Axum route renders
+the 404 page while the endpoint itself is perfectly fine. This has happened four
+times: the sign-in link (three separate call sites), the download button, and the
+`/admin/browser` link. It is invisible in review and compiles clean.
+
+- Linking to an Axum route: add `rel="external"`, or `download` if it is a file.
+- Linking to a Leptos route: use `<A>` and add nothing.
+- Sign-in specifically: use `components::sign_in::SignInLink`, which owns the
+  attribute. Do not hand-roll the href.
+- `tests/router_links.rs` parses the route list out of `main.rs` and fails on any
+  anchor that would be intercepted. A new Axum route is covered the moment it is
+  registered.
+
+## Hidden sons are visible to admins only, and only through the app
+
+`is_public = 0` means held (screening was down) or auto-hidden (3 reports). The
+report queue links to those sons, so `api::get_son` and `public_route::download`
+serve them to an admin and 404 for everyone else — an admin has to see what they
+are deleting. The detail page badges them "Hidden". The public API, sitemap,
+search, gallery and embed exclude them for **everyone**, admin included: those are
+publication surfaces, not review tools.
+
+## serde tagging and server-fn payloads
+
+`#[serde(tag = "...")]` cannot encode a newtype variant holding a `Vec` — it needs
+a place to put the tag key and an array has none. It compiles, server-renders
+correctly, and then panics inside `leptos_server`'s resource serializer while
+preparing the value for hydration: the page arrives complete and never hydrates,
+so the browser hangs with nothing on screen and curl reports a perfect 200. Use
+`tag = "..." , content = "..."` (adjacent tagging), and round-trip every variant
+through `serde_json` in a test — see `AdminQueue`.
+
 ## Admin is an env var, not a database flag
 
 `ADMIN_EMAILS` (comma-separated) is re-checked at every Google login and written

@@ -16,6 +16,7 @@ use crate::components::legal::{Privacy, Terms};
 use crate::components::progress::{Loading, TopProgress};
 use crate::components::search::SearchPage;
 use crate::components::search_box::SearchBox;
+use crate::components::sign_in::SignInLink;
 use crate::components::sort_chips::{GalleryView, SortCtx};
 use crate::components::upload::Upload;
 
@@ -205,11 +206,16 @@ fn SiteFooter() -> impl IntoView {
             // so it lines up with the content above rather than with the
             // viewport.
             <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+0.75rem)] pt-2 lg:px-8 lg:pb-6">
-                <div class="mx-auto flex max-w-content justify-center gap-4 text-[0.6875rem] text-ink-3/70">
-                    <A href="/privacy" attr:class="transition-colors hover:text-ink-2">
+                // gap-2 rather than gap-4: the padding below is what separates
+                // them now. `py-1.5 px-2` takes each link from a 17px-tall target
+                // to 26px without changing how the footer looks -- 11px type has
+                // to be reachable with a thumb like everything else, and these
+                // two were the only controls on the site under the 24px floor.
+                <div class="mx-auto flex max-w-content justify-center gap-2 text-[0.6875rem] text-ink-3/70">
+                    <A href="/privacy" attr:class="px-2 py-1.5 transition-colors hover:text-ink-2">
                         "Privacy"
                     </A>
-                    <A href="/tos" attr:class="transition-colors hover:text-ink-2">
+                    <A href="/tos" attr:class="px-2 py-1.5 transition-colors hover:text-ink-2">
                         "Terms"
                     </A>
                 </div>
@@ -325,7 +331,6 @@ fn BottomNav() -> impl IntoView {
 /// wider sidebar variant went away with the sidebar.
 #[component]
 fn AccountAction() -> impl IntoView {
-    let location = use_location();
     let user = Resource::new(|| (), |_| current_user());
     // Whether the account menu is open. Signed-out visitors never see it, so
     // this is only ever toggled by the avatar button below.
@@ -449,20 +454,14 @@ fn AccountAction() -> impl IntoView {
                             // not configured yet) and Err (couldn't reach D1)
                             // get the same link -- nothing useful to tell a
                             // visitor apart between those here.
-                            let return_to = location.pathname.get();
-                            let href = format!(
-                                "/auth/google/login?return_to={}",
-                                urlencode(&return_to),
-                            );
                             view! {
-                                <a
-                                    class="icon-btn"
-                                    href=href
-                                    aria-label="Sign in"
-                                    title="Sign in"
-                                >
+                                // SignInLink, not a hand-rolled anchor: it owns the
+                                // rel="external" that keeps the router from
+                                // intercepting this Axum-only path and 404ing on it,
+                                // and it reads the return path itself.
+                                <SignInLink label="Sign in" attr:class="icon-btn">
                                     <Ico icon=LuUserRound size=18/>
-                                </a>
+                                </SignInLink>
                             }
                                 .into_any()
                         }
@@ -470,18 +469,6 @@ fn AccountAction() -> impl IntoView {
             }}
         </Suspense>
     }
-}
-
-/// Percent-encode a path for use as a query value. `return_to` is always a
-/// same-origin path (checked again server-side in oauth_route::login), so
-/// only the characters that would break a query string need escaping.
-fn urlencode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' => c.to_string(),
-            _ => format!("%{:02X}", c as u32),
-        })
-        .collect()
 }
 
 /// The site logo as this page's link-preview image, for pages that have no image
@@ -526,10 +513,14 @@ fn NotFound() -> impl IntoView {
     view! {
         <Title text="no son here — son collection"/>
         // Same shape as the site's other zero states -- icon tile, one line --
-        // which is what makes this read as a finished page rather than a stub,
-        // now that it carries no link of its own. It is not a dead end: the
-        // header logo is a home link at every width and the mobile bottom bar
-        // still has Gallery.
+        // which is what makes this read as a finished page rather than a stub.
+        //
+        // It carries a link again. Leaning on the header logo was the argument
+        // for leaving it out, and it was wrong: this is the one page on the site
+        // that exists because the visitor's next step failed, so the next step is
+        // the whole content, and "the chrome has a home link" is true of every
+        // dead end ever shipped. The son-missing 404 in `detail.rs` always had
+        // one, which made the two 404s disagree about whether that was needed.
         //
         // The tile is sized by its padding and the 28px glyph, not by an
         // explicit box, so there is one number to change rather than three that
@@ -545,6 +536,17 @@ fn NotFound() -> impl IntoView {
                 <Ico icon=LuCircleAlert size=28/>
             </span>
             <h1 class="m-0 text-base font-semibold text-ink">"No son at this address"</h1>
+            <p class="m-0 max-w-[40ch] text-[0.875rem] text-ink-2">
+                "The link may be old, or the son may have been taken down."
+            </p>
+            // <A>, not a plain anchor: these are Leptos routes, so the router
+            // handles them client-side and there is nothing for rel to opt out
+            // of. Two ways on, because a 404 has two likely causes -- a stale
+            // link (browse) and a mistyped one (search).
+            <div class="mt-1 flex flex-wrap items-center justify-center gap-2">
+                <A href="/" attr:class="btn">"Back to the collection"</A>
+                <A href="/search" attr:class="btn-quiet">"Search for a son"</A>
+            </div>
             <p class="m-0 text-[0.8125rem] text-ink-3">"404"</p>
         </section>
     }

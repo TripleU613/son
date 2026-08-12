@@ -4,7 +4,7 @@ use leptos_router::components::A;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
 use crate::api::{get_son, son_neighbours};
-use crate::components::icon::{Ico, LuDownload, LuUserRound};
+use crate::components::icon::{Ico, LuCircleAlert, LuDownload, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::more_sons::MoreSons;
 use crate::components::report::ReportForm;
@@ -513,6 +513,24 @@ pub fn SonDetail() -> impl IntoView {
                                         // primitive.
                                         <h1 class="m-0 text-[1.375rem] font-bold leading-tight tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
 
+                                        // Only an admin can reach a son that is
+                                        // not public (`api::get_son` gates it), so
+                                        // this is not a state a visitor can see.
+                                        // It exists because they can now reach it:
+                                        // without a badge the page is identical to
+                                        // a live son's, and the admin reviewing it
+                                        // has no way to tell that what they are
+                                        // looking at is not in the gallery.
+                                        {(!s.is_public)
+                                            .then(|| {
+                                                view! {
+                                                    <p class="mt-2 inline-flex items-center gap-1.5 rounded-full border border-danger/30 bg-danger/15 px-2.5 py-1 text-[0.78rem] font-medium text-danger">
+                                                        <Ico icon=LuCircleAlert size=13/>
+                                                        "Hidden \u{2014} not in the gallery"
+                                                    </p>
+                                                }
+                                            })}
+
                                         // The avatar or icon belongs to the
                                         // name, so it sits in the same span at
                                         // a tighter gap -- at a flat gap-2 it
@@ -598,9 +616,17 @@ pub fn SonDetail() -> impl IntoView {
                                             // sets no margin, so this is not a
                                             // same-property fight with the
                                             // primitive.
+                                            // `download` both asks the browser to
+                                            // save rather than navigate *and* stops
+                                            // leptos_router hijacking the click:
+                                            // without it the router routed this
+                                            // Axum-only path client-side, matched no
+                                            // Leptos route, and the download button
+                                            // rendered the 404 page.
                                             <a
                                                 class="icon-btn ml-auto"
-                                                href=format!("/son/{}/download", s.id)
+                                                download=""
+                                                href=format!("/son/{}/download", s.slug)
                                                 aria-label="Download"
                                                 title="Download"
                                             >

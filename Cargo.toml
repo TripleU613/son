@@ -176,6 +176,23 @@ bin-default-features = false
 lib-features = ["hydrate"]
 lib-default-features = false
 
+# Line tables instead of full debug info.
+#
+# Not a preference: a plain `cargo build`/`cargo test --test ...` could not link
+# the binary at all. Full `.debug_info` across this dependency tree (image codecs,
+# aws-sdk, leptos) overruns the 32-bit range that R_X86_64_32 relocations have to
+# fit in, and the linker gives up with "relocation out of range ... consider
+# recompiling with -fdebug-types-section". Only `cargo leptos watch` and the
+# release build worked, which is why it went unnoticed -- and it meant an
+# integration test under tests/ could not be compiled, because building one links
+# the bin.
+#
+# Line tables keep what is actually used here: file and line in panics and
+# backtraces. Variable inspection in a debugger is what goes, and nothing in this
+# project has been debugged that way.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = "z"
 lto = true

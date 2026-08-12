@@ -15,7 +15,7 @@
 //! wants none of them.
 
 use axum::extract::{Path, Query};
-use axum::http::{header, HeaderName, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -380,15 +380,30 @@ fn embed_gone(status: StatusCode, message: &str) -> axum::response::Response {
         .into_response()
 }
 
+/// Whether this request carries an admin's session cookie.
+async fn is_admin(headers: &HeaderMap) -> bool {
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok());
+    matches!(
+        crate::auth::current_user(cookie).await,
+        Ok(Some(u)) if u.is_admin
+    )
+}
+
 /// Same-origin download proxy. `<a download>` is silently ignored by browsers
 /// when the link target is cross-origin, and R2's public domain
 /// (media.soncollection.com) is a different origin from the app -- so this
 /// route fetches the object itself and sets `Content-Disposition` on a
 /// response that genuinely comes from this site, which is the only way the
 /// browser reliably treats the click as "save this file."
-pub async fn download(Path(id): Path<String>) -> impl IntoResponse {
+/// Takes the headers only for the admin exception: an admin reviewing a held son
+/// can open its page (see `api::get_son`), and a Download button that 404s on the
+/// page it is drawn on is exactly the dead end this route would otherwise create.
+/// Everyone else still gets a 404 for anything hidden.
+pub async fn download(headers: HeaderMap, Path(id): Path<String>) -> impl IntoResponse {
     let son = match crate::db::get(&id, None).await {
-        Ok(Some(son)) if son.is_public => son,
+        Ok(Some(son)) if son.is_public || is_admin(&headers).await => son,
         Ok(_) => return (StatusCode::NOT_FOUND, "no such son").into_response(),
         Err(e) => return api_error(e),
     };
