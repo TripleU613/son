@@ -1134,14 +1134,18 @@ pub async fn sitemap_sons(limit: i64) -> anyhow::Result<Vec<SitemapSon>> {
 mod tests {
     use super::*;
 
+    // Invented names only, here and in the pseudonym tests below. A test fixture
+    // is source code: putting a real contributor's name in one publishes it to
+    // anyone who reads the repository, which is the exact thing the function
+    // under test exists to prevent.
     #[test]
     fn only_the_first_name_is_published() {
-        assert_eq!(public_first_name("Usher Weiss"), "Usher");
+        assert_eq!(public_first_name("Ada Lovelace"), "Ada");
         assert_eq!(public_first_name("Mary Jane Watson"), "Mary");
         // Hyphenated given names are one word and survive whole.
         assert_eq!(public_first_name("Mary-Jane Watson"), "Mary-Jane");
         // Google pads and double-spaces more often than you would hope.
-        assert_eq!(public_first_name("  Usher   Weiss  "), "Usher");
+        assert_eq!(public_first_name("  Ada   Lovelace  "), "Ada");
     }
 
     /// Never returns less than it was given when there is no surname to drop.

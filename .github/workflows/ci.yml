@@ -147,10 +147,15 @@ jobs:
         # exists to prevent.
         env:
           DEPLOY_KEY: ${{ secrets.JTECH_SSH_KEY }}
+          # "<address> ssh-ed25519 AAAA...", the one line ssh-keyscan prints.
+          # In a secret rather than deploy/known_hosts because the line begins
+          # with the origin address -- see DEPLOY_HOST below.
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_HOST_KEY" >> ~/.ssh/known_hosts
           cat deploy/known_hosts >> ~/.ssh/known_hosts
 
       - name: deploy
@@ -162,11 +167,13 @@ jobs:
         # from it, so a new variable in docker-compose.yml only needs adding
         # here once, not once per command.
         env:
-          # jtech's static public address. Deliberately an IP and not a
-          # hostname: every public name for this box resolves to a Cloudflare
-          # proxy, and creating an A record for the origin would publish the
-          # address of the Discourse install sitting behind it.
-          DEPLOY_HOST: ORIGIN_ADDRESS_REDACTED
+          # A secret rather than a literal, and not because it is a credential
+          # -- it is not. It is the ORIGIN address of a box whose public names
+          # all sit behind a Cloudflare proxy, including a Discourse forum that
+          # has nothing to do with this project. Committing it hands anyone who
+          # reads this repository a way to skip the proxy and reach the origin
+          # directly, which is the one thing proxying that forum was for.
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           SON_IMAGE: ${{ needs.build.outputs.image }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
