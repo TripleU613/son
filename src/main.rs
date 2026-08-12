@@ -68,7 +68,28 @@ async fn main() -> anyhow::Result<()> {
         // in-process) but every client-side call 404s.
         //
         // Declared before the wildcard so the static path wins the match.
-        .route("/api/upload", post(soncollection::upload_route::upload))
+        // axum caps request bodies at 2MB by default, and the Multipart
+        // extractor hits that ceiling before any of this app's own limits are
+        // consulted. So an upload between 2MB and the 12MB the page advertises
+        // failed with `Error parsing multipart/form-data request` -- not a size
+        // error, not mentioning a size, and impossible to act on. Both halves
+        // were wrong: the limit was a quarter of the documented one, and the
+        // rejection did not say so.
+        //
+        // Raised to MAX_UPLOAD_BYTES plus a megabyte of slack, because the body
+        // carries multipart boundaries, headers and the title field on top of
+        // the image itself -- sizing it to exactly MAX_UPLOAD_BYTES would reject
+        // a file of precisely the advertised maximum.
+        //
+        // `storage::decode` still enforces the real limit and still produces the
+        // message a visitor sees; this only stops the extractor refusing the
+        // request before that code can run.
+        .route(
+            "/api/upload",
+            post(soncollection::upload_route::upload).layer(axum::extract::DefaultBodyLimit::max(
+                soncollection::storage::MAX_UPLOAD_BYTES + 1024 * 1024,
+            )),
+        )
         .route(
             "/api/upload/status/{id}",
             get(soncollection::upload_route::status),
