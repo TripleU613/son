@@ -73,6 +73,19 @@ async fn main() -> anyhow::Result<()> {
             "/api/upload/status/{id}",
             get(soncollection::upload_route::status),
         )
+        // The admin sign-in browser. Every one of these checks is_admin itself --
+        // they are plain Axum routes, not Leptos ones, so they get no gating for
+        // free. Order matters: the WebSocket path must be declared before the
+        // wildcard, or the wildcard swallows it.
+        .route("/admin/browser", get(soncollection::browser_proxy::page))
+        .route(
+            "/admin/browser/websockify",
+            get(soncollection::browser_proxy::websocket),
+        )
+        .route(
+            "/admin/browser/{*path}",
+            get(soncollection::browser_proxy::asset),
+        )
         .route("/auth/google/login", get(soncollection::oauth_route::login))
         .route(
             "/auth/google/callback",

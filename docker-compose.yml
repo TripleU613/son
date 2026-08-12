@@ -77,6 +77,9 @@ services:
       # The sidecar, by service name on the private network. Absent -> uploads
       # publish unscreened, so this is left explicit rather than defaulted.
       GEMINI_URL: ${GEMINI_URL:-http://gemini:8099}
+      # The keeper's noVNC, proxied to admins at /admin/browser so signing in
+      # needs nothing but the deployed site.
+      KEEPER_URL: ${KEEPER_URL:-http://keeper:6080}
       # Lets /admin swap the sidecar's cookies without a redeploy.
       SIDECAR_KEY: ${SIDECAR_KEY:-}
     # Started but not waited on: `service_started` rather than
@@ -122,27 +125,24 @@ services:
     restart: unless-stopped
     # Not read_only: Chromium writes throughout its profile, and the profile is
     # the point. It is confined to the /tmp tmpfs below.
-    # A browser is heavier than everything else here combined, and this one is
-    # idle between refreshes. 900m fits Chromium plus one page; the shm size
-    # matters more than the total -- Chrome's default 64MB /dev/shm is what makes
-    # headless Chrome crash on real pages.
-    mem_limit: 900m
-    memswap_limit: 900m
+    # A browser is heavier than everything else here combined. 1200m rather than
+    # 900m because this one runs with a display rather than headless (so an admin
+    # can sign in through it) and measured 656MB headless -- 900m left too little
+    # margin for a page load to spike into. The shm size matters as much as the
+    # total: Chrome's default 64MB /dev/shm is what makes it crash on real pages.
+    mem_limit: 1200m
+    memswap_limit: 1200m
     cpus: 0.5
     shm_size: 256m
     tmpfs:
       - /tmp:exec,size=700m
-    # Login mode only, and bound to the Tailscale interface rather than 0.0.0.0:
-    # this is a browser holding a live Google session, so it is reachable from the
-    # tailnet and nowhere else. Normal operation starts nothing on this port.
-    ports:
-      - "${KEEPER_LOGIN_BIND:-100.88.11.83}:6080:6080"
+    # No published port at all. 6080 is reached only from the app container, which
+    # proxies it to signed-in admins at /admin/browser -- so the browser is behind
+    # the site's own auth rather than behind "can you reach this host". The
+    # tailnet-bound port this used to publish was one more way in for no gain.
     environment:
       SIDECAR_URL: http://gemini:8099
       SIDECAR_KEY: ${SIDECAR_KEY:-}
-      # 1 turns the container into a one-time sign-in window instead of the
-      # headless refresher. Set it, redeploy, sign in, unset it.
-      KEEPER_LOGIN_MODE: ${KEEPER_LOGIN_MODE:-0}
       # R2 is where the browser profile lives, so a restart resumes the same
       # session rather than needing a fresh login -- and "no storage on the
       # server" stays true.

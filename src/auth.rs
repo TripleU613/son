@@ -222,18 +222,57 @@ pub async fn complete_login(
     })
 }
 
+/// The encrypted value the server would set for this user's session, for local
+/// testing of the admin-only routes.
+///
+/// Same key derivation and same cookie name as `establish_session`, deliberately:
+/// a test that forges auth by a different route would prove nothing about the real
+/// one. Returns `None` when `SESSION_SECRET` is unusable, so it cannot silently
+/// produce something that will not verify.
+///
+/// Not reachable from any route -- see `examples/mint_test_session.rs`.
+pub fn debug_session_cookie(user_id: &str) -> Option<String> {
+    let key = session_key()?;
+    let mut jar = CookieJar::new();
+    jar.private_mut(&key)
+        .add(Cookie::new(SESSION_COOKIE, user_id.to_string()));
+    jar.get(SESSION_COOKIE).map(|c| c.value().to_string())
+}
+
+/// The signed-in user's id, straight out of the session cookie, with no
+/// database round trip.
+///
+/// The cookie is AES-GCM sealed with `SESSION_SECRET`, so one that decrypts *is*
+/// proof that a Google login completed against this server's key. The `users`
+/// lookup `current_user` does is there to pick up a display name and a live
+/// `is_admin`, and neither a like nor a report needs either. That is worth a
+/// separate function because likes are now keyed on the account rather than on
+/// an anonymous cookie (see `api::current_actor`), so this runs on every gallery
+/// render — routing that through `current_user` would add a D1 query per page
+/// load to fetch a name nothing on that path displays.
+///
+/// The one check it skips is that the row still exists. Nothing in this app
+/// deletes a user; if that ever changes, revocation belongs in `current_user`,
+/// and every caller of this needs revisiting at the same time.
+pub fn session_user_id(cookie_header: Option<&str>) -> Option<String> {
+    let key = session_key()?;
+    let jar = parse_jar(cookie_header);
+    let id = jar.private(&key).get(SESSION_COOKIE)?.value().to_string();
+    // An empty value is what `logout_set_cookie` writes on the way out; treat
+    // it as signed out rather than as a user whose id is the empty string,
+    // which would otherwise become a real `likes.voter_id` shared by everyone
+    // who has ever signed out.
+    (!id.is_empty()).then_some(id)
+}
+
 /// Read the current session cookie and look up the user, if any. Returns
 /// `Ok(None)` for "not logged in" and only errs on a genuine problem (D1
 /// unreachable) — an absent or invalid cookie is not an error.
 pub async fn current_user(cookie_header: Option<&str>) -> anyhow::Result<Option<User>> {
-    let Some(key) = session_key() else {
+    let Some(id) = session_user_id(cookie_header) else {
         return Ok(None);
     };
-    let jar = parse_jar(cookie_header);
-    let Some(id_cookie) = jar.private(&key).get(SESSION_COOKIE) else {
-        return Ok(None);
-    };
-    crate::db::get_user(id_cookie.value()).await
+    crate::db::get_user(&id).await
 }
 
 /// `Set-Cookie` value that clears the session, for `/auth/logout`.

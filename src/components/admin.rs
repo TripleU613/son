@@ -316,6 +316,14 @@ fn ScreeningPanel() -> impl IntoView {
                 }}
             </Suspense>
 
+            // A plain <a>, not <A>: /admin/browser is an Axum route outside the
+            // Leptos router, so a client-side navigation would 404 against it.
+            <p class="mt-3 text-[0.85rem] text-ink-2">
+                "Signing in: "
+                <a class="text-accent underline" href="/admin/browser">"open the sign-in browser"</a>
+                " and sign in to Google there, or paste cookies below."
+            </p>
+
             <form
                 class="mt-3 grid gap-2"
                 on:submit=move |ev| {

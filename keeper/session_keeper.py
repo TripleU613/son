@@ -11,10 +11,10 @@ gemini.google.com every so often refreshes its own `__Secure-1PSIDTS` the way an
 open tab does, and its cookie jar is always current. This reads that jar and POSTs
 the values to the sidecar's /cookies endpoint.
 
-**Logging in is a human step, once.** Nothing here types a password or handles
-credentials: it drives a browser profile that is already authenticated. See
-`keeper/README.md` for how to produce that profile, and `LOGIN_CHECK_ONLY=1` to
-verify one before deploying it.
+**Logging in is a human step.** Nothing here types a password or handles
+credentials -- it drives a browser, and a person signs in through it. The browser
+runs on a virtual display exported over VNC, which the app proxies to signed-in
+admins at `/admin/browser`, so signing in needs nothing but the deployed site.
 
 Where the profile lives: R2, not the server. "No storage on the server" is a hard
 rule for this project, and a browser profile is state. It is pulled into /tmp at
@@ -47,11 +47,6 @@ SIDECAR_KEY = os.environ.get("SIDECAR_KEY", "")
 # Well inside the ~30 minute __Secure-1PSIDTS rotation window, so the jar is
 # never more than one cycle stale.
 REFRESH_SECONDS = int(os.environ.get("KEEPER_REFRESH_SECONDS", "600"))
-
-# Login mode: run the browser with a display instead of headless, so a human can
-# sign in through it over the tailnet. See `login_mode()`.
-LOGIN_MODE = os.environ.get("KEEPER_LOGIN_MODE") == "1"
-LOGIN_MINUTES = int(os.environ.get("KEEPER_LOGIN_MINUTES", "20"))
 
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
@@ -176,100 +171,52 @@ async def _cycle(ctx, page, last: tuple[str, str] | None) -> tuple[str, str] | N
 
 
 async def run() -> None:
-    # No browser until there is a profile to drive.
-    #
-    # Chromium idles at ~650MB, and this container's whole job is to use *a
-    # logged-in session*. Launching it to sit in a failing loop with no profile
-    # spent two thirds of the memory limit achieving nothing -- measured in
-    # production before this changed. Polling R2 costs one HTTP request a minute
-    # and means uploading the profile is enough to start it: no restart, no deploy.
-    while not restore_profile():
-        log.error(
-            "no logged-in profile at r2://%s. Nothing here can log in -- sign in "
-            "once (keeper/README.md) and upload it; this will pick it up within a "
-            "minute. Not launching a browser until then.",
-            PROFILE_KEY,
-        )
-        await asyncio.sleep(60)
+    """One browser, always running, visible at /admin/browser.
 
-    log.info("profile present; starting the browser")
-    async with async_playwright() as pw:
-        # A persistent context, not a fresh browser: the whole point is to keep
-        # using one profile's session rather than starting a new anonymous one
-        # that would need logging in.
-        ctx = await pw.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        last: tuple[str, str] | None = None
+    Not headless, and started whether or not a profile exists yet. Both are
+    deliberate: this is the window an admin signs in through, and it has to be
+    there *before* there is a session, because creating the session is what they
+    are opening it for. A mode flag would put a redeploy between "the session
+    died" and "I can fix it".
 
-        while True:
-            try:
-                last = await _cycle(ctx, page, last)
-            except Exception as e:  # noqa: BLE001 - a bad cycle must not kill the loop
-                log.error("refresh cycle failed: %s", e)
-            await asyncio.sleep(REFRESH_SECONDS)
-
-
-async def login_mode() -> None:
-    """Hold a visible browser open so a human can sign in, then save the profile.
-
-    This is the one step nothing here can do on its own: Google mints the session,
-    and only in response to a real login. Rather than asking for a password -- which
-    this codebase will not handle -- or for a DevTools cookie hunt, the keeper's own
-    Chromium runs with a display and is reachable over the tailnet. Sign in, and the
-    profile it was already going to use is saved to R2.
-
-    Starts from any existing profile, so this doubles as "re-authenticate the one I
-    have" rather than only ever starting from scratch.
-
-    Bounded by KEEPER_LOGIN_MINUTES: an interactive browser holding a live session
-    should not stay open indefinitely because someone forgot to switch the mode off.
-    It saves whatever it has when the window closes or the time runs out.
+    The loop is the same either way -- load the page, read the jar, push the
+    cookies if they moved -- and simply reports that it is not signed in until it
+    is. The moment someone signs in through the VNC window, the next cycle sees
+    new cookies and hands them to the sidecar.
     """
     restore_profile()
-    log.info(
-        "login mode: open the VNC page, sign in to Google, then close the window "
-        "or wait. Saving to r2://%s. Window: %d minutes.",
-        PROFILE_KEY,
-        LOGIN_MINUTES,
-    )
 
     async with async_playwright() as pw:
+        # A persistent context, so the session survives restarts via the profile,
+        # and headless=False because there is a display and a human may be looking
+        # at it.
         ctx = await pw.chromium.launch_persistent_context(
             PROFILE_DIR,
             headless=False,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--start-maximized"],
+            viewport=None,
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
+        last: tuple[str, str] | None = None
+        announced = False
 
-        deadline = asyncio.get_running_loop().time() + LOGIN_MINUTES * 60
-        signed_in = False
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(10)
+        while True:
             try:
-                jar = {c["name"] for c in await ctx.cookies()}
-            except Exception:  # noqa: BLE001 - the window was closed
-                break
-            if all(n in jar for n in WANTED):
-                if not signed_in:
-                    log.info("signed in; saving the profile")
-                    signed_in = True
-                # Saved on every pass while signed in, so closing the window at any
-                # point leaves a good copy in R2 rather than only saving at the end.
-                save_profile()
-                jar_full = {c["name"]: c["value"] for c in await ctx.cookies()}
-                await push_cookies(jar_full["__Secure-1PSID"], jar_full["__Secure-1PSIDTS"])
-
-        if not signed_in:
-            log.error("login window closed without a signed-in session; nothing saved")
-        try:
-            await ctx.close()
-        except Exception:  # noqa: BLE001
-            pass
+                before = last
+                last = await _cycle(ctx, page, last)
+                if last and last != before:
+                    announced = False
+                if last is None and not announced:
+                    log.error(
+                        "not signed in. Open /admin/browser on the site and sign in "
+                        "to Google in that window; this will pick it up within %d "
+                        "seconds.",
+                        REFRESH_SECONDS,
+                    )
+                    announced = True
+            except Exception as e:  # noqa: BLE001 - a bad cycle must not kill the loop
+                log.error("refresh cycle failed: %s", e)
+            await asyncio.sleep(REFRESH_SECONDS)
 
 
 if __name__ == "__main__":
@@ -291,8 +238,6 @@ if __name__ == "__main__":
                 await ctx.close()
 
         asyncio.run(check())
-    elif LOGIN_MODE:
-        asyncio.run(login_mode())
     else:
         try:
             asyncio.run(run())

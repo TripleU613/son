@@ -13,6 +13,9 @@ pub mod seo;
 
 #[cfg(feature = "ssr")]
 pub mod auth;
+/// Admin-only proxy to the keeper's sign-in browser.
+#[cfg(feature = "ssr")]
+pub mod browser_proxy;
 #[cfg(feature = "ssr")]
 pub mod d1;
 #[cfg(feature = "ssr")]
