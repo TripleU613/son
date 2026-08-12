@@ -1,4 +1,4 @@
-//! The search form, shared by the mobile top bar and the gallery's utility row.
+//! The search form in the top bar. One instance, present at every width.
 //!
 //! A plain GET to /search rather than a JS-driven search-as-you-type: it works
 //! before hydration has loaded, and /search renders its results server-side
@@ -10,20 +10,19 @@ use leptos_router::hooks::use_query_map;
 use crate::components::icon::{Ico, LuSearch};
 
 #[component]
-pub fn SearchBox(
-    /// Reactive so the header can toggle the expanded state; `Signal<String>`
-    /// rather than `Option<String>` because the class now changes at runtime.
-    #[prop(optional, into)]
-    extra_class: Signal<String>,
-) -> impl IntoView {
-    // `flex-1` on mobile so the field fills the top bar, `lg:flex-none` on
-    // desktop where its width comes from the caller's expanded/collapsed class.
-    let cls = move || {
-        format!(
-            "relative flex min-w-0 flex-1 items-center lg:flex-none {}",
-            extra_class.get()
-        )
-    };
+pub fn SearchBox() -> impl IntoView {
+    // Static, not a reactive class: this used to take an `extra_class` signal
+    // so the header could expand and collapse it behind a magnifier button.
+    // The button is gone -- the field is already the affordance, and a bar
+    // carrying both an icon meaning "search" and the field it revealed was
+    // saying the same thing twice -- so there is no longer any state to react
+    // to.
+    //
+    // `flex-1` takes whatever the brand and the account controls leave. On
+    // desktop `max-w-md` stops one pill stretching across a 1320px bar, and at
+    // that point `mx-auto` absorbs the leftover space on both sides, which is
+    // what centres it.
+    let cls = "relative mx-auto flex min-w-0 flex-1 items-center lg:max-w-md";
     // Shows the current query while on /search, so the box you refine in is the
     // box that already holds what you searched for. Read from the URL rather
     // than kept in a signal: /search renders from the query string on the

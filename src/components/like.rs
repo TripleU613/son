@@ -77,11 +77,22 @@ pub fn LikeButton(
     } else {
         "px-3 py-1.5 text-[0.85rem]"
     };
+    // Four whole strings, not two crossed with a modifier, because the small
+    // variant now sits on top of a photograph instead of on `bg-surface`. A
+    // transparent chip behind a `border-line` hairline simply disappears over a
+    // bright son, and `bg-accent-soft` is 10% opacity -- enough to tint a dark
+    // panel, invisible over an image. On-image states carry their own dark
+    // backing so the count stays readable whatever is behind it.
     let class = move || {
-        let state = if liked.get() {
-            "border-accent-border bg-accent-soft text-accent"
-        } else {
-            "border-line bg-transparent text-ink-2 hover:border-accent-border hover:text-ink"
+        let state = match (small, liked.get()) {
+            (true, true) => "border-accent-border bg-black/55 text-accent backdrop-blur-sm",
+            (true, false) => {
+                "border-white/25 bg-black/55 text-ink backdrop-blur-sm hover:border-accent-border hover:text-accent"
+            }
+            (false, true) => "border-accent-border bg-accent-soft text-accent",
+            (false, false) => {
+                "border-line bg-transparent text-ink-2 hover:border-accent-border hover:text-ink"
+            }
         };
         format!("inline-flex flex-none items-center gap-1.5 rounded-full border transition-colors {size} {state}")
     };

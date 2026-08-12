@@ -6,7 +6,22 @@
 # Microsoft's Playwright image rather than building a browser install by hand: it
 # ships Chromium with the ~90 shared libraries headless Chrome needs, all matched
 # to the Playwright version. Pinned by digest like every other image here.
-FROM mcr.microsoft.com/playwright/python:v1.62.0-noble-amd64@sha256:c906992c927a2875cb6998f7e412a6177f4852391bf37294de11e352ad29a478
+#
+# Re-pin by asking the registry and then *proving the answer resolves*, because a
+# digest fetched with the wrong Accept headers is a different manifest's digest
+# and fails the build with a bare "not found":
+#
+#   H='Accept: application/vnd.oci.image.index.v1+json, \
+#      application/vnd.docker.distribution.manifest.list.v2+json'
+#   D=$(curl -sI -H "$H" \
+#       https://mcr.microsoft.com/v2/playwright/python/manifests/v1.62.0-noble \
+#       | awk '/^docker-content-digest/{print $2}' | tr -d '\r')
+#   curl -so /dev/null -w '%{http_code}\n' -H "$H" \
+#       "https://mcr.microsoft.com/v2/playwright/python/manifests/$D"   # want 200
+#
+# The multi-arch index rather than the -amd64 tag, so buildx resolves the right
+# architecture itself.
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d
 
 # awscli for the two R2 operations this does (fetch the profile, put it back).
 RUN apt-get update \

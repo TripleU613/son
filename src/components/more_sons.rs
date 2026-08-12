@@ -1,11 +1,11 @@
-//! A Pinterest-style masonry of further sons, used to fill the space below a
-//! single-son view (the detail page, and the son-of-the-day tab).
+//! A grid of further sons, used to fill the space below a single-son view (the
+//! detail page, and the son-of-the-day tab).
 //!
-//! Uses CSS multi-column rather than grid: real masonry wants uneven column
-//! runs, and `columns` gives that natively with `break-inside: avoid` on the
-//! cards. It also lets each card keep its true aspect ratio via the
-//! `--son-ratio` custom property the card already publishes, instead of the
-//! uniform 4:5 crop the main grid uses.
+//! Was a CSS multi-column masonry, so that each card could keep its true aspect
+//! ratio in ragged columns instead of the main grid's uniform crop. That reason
+//! is gone: `storage::square` crops every upload to a square, so the ragged
+//! columns had nothing left to be ragged about and this is now the same grid the
+//! gallery uses.
 
 use leptos::prelude::*;
 
@@ -50,7 +50,7 @@ pub fn MoreSons(
                                         <h2 class="m-0 mb-4 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
                                             "More sons"
                                         </h2>
-                                        <div class="columns-2 gap-3 sm:columns-3 lg:columns-4 xl:columns-5 [&_.card]:mb-3 [&_.card]:break-inside-avoid [&_.card-frame]:aspect-[var(--son-ratio,4/5)]">
+                                        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                             <For
                                                 each=move || sons.clone()
                                                 key=|s| s.id.clone()

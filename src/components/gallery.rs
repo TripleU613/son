@@ -188,30 +188,32 @@ pub fn Gallery() -> impl IntoView {
         </Show>
 
         <div
-            class="py-8 text-center"
+            class="py-6 text-center"
             class:hidden=move || is_empty.get() || son_of_day_view.get()
         >
             <Show
                 when=move || !exhausted.get()
                 fallback=|| ()
             >
-                // Fires "more sons" automatically once scrolled near, ahead of
-                // the button below -- which stays for anyone who'd rather
-                // load pages on request.
+                // The sentinel fetches the next page as it comes into view.
                 <ScrollSentinel on_visible=move || {
                     if !loading.get_untracked() {
                         load_more.dispatch(());
                     }
                 }/>
-                <button
-                    class="btn"
-                    disabled=move || loading.get()
-                    on:click=move |_| {
-                        load_more.dispatch(());
-                    }
-                >
-                    {move || if loading.get() { "loading…" } else { "more sons" }}
-                </button>
+                // Status, not a control. The "more sons" button that used to sit
+                // here fired the same action the sentinel had already fired by
+                // the time anyone could scroll far enough to press it -- so it
+                // was a button whose job was always finished before it was
+                // reachable. What is actually worth showing is whether a fetch
+                // is in flight.
+                //
+                // `aria-live` because the alternative to a button is that new
+                // sons appear silently, which a screen reader would otherwise
+                // never mention.
+                <p class="m-0 text-[0.8125rem] text-ink-3" aria-live="polite">
+                    {move || if loading.get() { "loading more sons…" } else { "" }}
+                </p>
             </Show>
         </div>
     }

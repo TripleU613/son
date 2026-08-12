@@ -9,7 +9,7 @@ use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
 use crate::components::icon::{
-    Ico, LuCirclePlus, LuImage, LuLogOut, LuSearch, LuTrophy, LuUserRound,
+    Ico, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound,
 };
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
@@ -139,15 +139,21 @@ pub fn App() -> impl IntoView {
                 // background with nothing terminating the page. The wrapper also
                 // puts them on the same `max-w-content` column and the same
                 // lg:px-8 gutter as <main>, which the old lg:px-6 quietly missed.
-                <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+1rem)] lg:px-8 lg:pb-8">
-                    <div class="mx-auto flex max-w-content justify-center gap-5 border-t border-line pt-5 text-xs text-ink-3">
-                        <A
-                            href="/privacy"
-                            attr:class="rounded-sm transition-colors hover:text-ink-2"
-                        >
+                // Kept, but reduced to a whisper: no rule, no band, no weight.
+                //
+                // It survives at all because these are the only links to
+                // /privacy and /tos anywhere on the site, and Google's OAuth
+                // verification requires a reachable privacy policy for the
+                // sign-in this app ships. Deleting the footer deletes the only
+                // route to it. What it does not need is a hairline across the
+                // full content width announcing two words, which is what made it
+                // read as a section rather than as fine print.
+                <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+0.75rem)] pt-2 lg:px-8 lg:pb-6">
+                    <div class="mx-auto flex max-w-content justify-center gap-4 text-[0.6875rem] text-ink-3/70">
+                        <A href="/privacy" attr:class="transition-colors hover:text-ink-2">
                             "Privacy"
                         </A>
-                        <A href="/tos" attr:class="rounded-sm transition-colors hover:text-ink-2">
+                        <A href="/tos" attr:class="transition-colors hover:text-ink-2">
                             "Terms"
                         </A>
                     </div>
@@ -162,10 +168,6 @@ pub fn App() -> impl IntoView {
 /// -- the sort chips, replacing the sidebar entirely.
 #[component]
 fn Header() -> impl IntoView {
-    // Search collapses to an icon on desktop and expands in place. Starts
-    // closed, so the server and the first hydration pass agree on the tree.
-    let (search_open, set_search_open) = signal(false);
-
     view! {
         <header class="fixed inset-x-0 top-0 z-30 h-topbar border-b border-line bg-bg lg:h-topbar-lg">
             // Inner wrapper so the bar's contents line up with the content
@@ -176,7 +178,13 @@ fn Header() -> impl IntoView {
             // The real mark, at 2x for retina. width/height are set so the
             // header does not reflow while it loads, and it is eager rather than
             // lazy because it is the first thing above the fold.
-            <A href="/" attr:class="flex flex-none items-center" attr:aria-label="son collection, home">
+            // `lg:flex-1` here and on the icon group opposite makes the two
+            // side regions equal, which is what actually centres the search
+            // field: left to size themselves, the 93px brand and the 3-icon
+            // group are not the same width, and the field sat 29px left of the
+            // page centre. Measured, not eyeballed. Below lg the brand stays
+            // `flex-none` so the field can take the rest of a narrow bar.
+            <A href="/" attr:class="flex flex-none items-center lg:flex-1" attr:aria-label="son collection, home">
                 <img
                     src="/logo.png"
                     alt="son collection"
@@ -187,12 +195,25 @@ fn Header() -> impl IntoView {
                 />
             </A>
 
-            <div class="ml-auto flex min-w-0 items-center gap-2">
-                // Desktop-only section links, as icons alongside search and the
-                // account action. No Gallery entry: the brand is the gallery,
-                // which is the default view. Icon-only, so each carries an
-                // aria-label and a title -- the label is the accessible name,
-                // the title is the hover tooltip.
+            // The search field, between the brand and the account controls at
+            // every width. It used to collapse behind a magnifier on desktop
+            // and expand on click, which meant the bar held two things that
+            // both meant "search" -- the icon and, once open, the field it
+            // revealed. The field is its own affordance, so the icon is gone
+            // and the state that drove it with it.
+            //
+            // `flex-1` with a desktop cap and `mx-auto`: the field takes the
+            // room between the two fixed side groups, and once the cap binds,
+            // the auto margins absorb what is left over and centre it rather
+            // than letting one 448px pill drift against the brand.
+            <SearchBox/>
+
+            <div class="flex flex-none items-center gap-1 lg:flex-1 lg:justify-end lg:gap-2">
+                // Desktop-only section links, as icons alongside the account
+                // action. No Gallery entry: the brand is the gallery, which is
+                // the default view. Icon-only, so each carries an aria-label
+                // and a title -- the label is the accessible name, the title is
+                // the hover tooltip.
                 <nav class="hidden flex-none items-center gap-1 lg:flex" aria-label="main">
                     <A
                         href="/upload"
@@ -213,42 +234,6 @@ fn Header() -> impl IntoView {
                 </nav>
 
                 <AccountAction/>
-
-                // Search sits last in the lineup. The expanded field opens to
-                // its left (`order-first` on the form) so growing it pushes
-                // nothing around: the icons keep their positions and the field
-                // fills the gap that is already there.
-                <button
-                    class="icon-btn hidden flex-none lg:inline-flex"
-                    aria-label="Search"
-                    aria-expanded=move || search_open.get().to_string()
-                    title="Search"
-                    on:click=move |_| set_search_open.update(|o| *o = !*o)
-                >
-                    <Ico icon=LuSearch size=18/>
-                </button>
-                // Collapsed to nothing on desktop until the icon is clicked,
-                // always visible on mobile where the bar has room. `lg:hidden`
-                // rather than a width/opacity transition: an invisible-but-
-                // present field is still focusable, so tabbing through the
-                // header would land in a search box nobody can see.
-                //
-                // `order-first` unconditionally, which on mobile is what puts
-                // the field between the brand and the account button. In DOM
-                // order the account action comes first, so the avatar sat
-                // marooned in the middle of the bar with the search field to
-                // its right -- brand, account, search reads as three unrelated
-                // things, where brand, search, account is the arrangement every
-                // other app has trained people to expect. On desktop it is the
-                // same rule the expanded field already used: grow leftwards
-                // into space that is already empty, so the icons never move.
-                <SearchBox extra_class=Signal::derive(move || {
-                    if search_open.get() {
-                        "order-first lg:flex lg:w-64".to_string()
-                    } else {
-                        "order-first lg:hidden".to_string()
-                    }
-                })/>
                 </div>
             </div>
         </header>
