@@ -139,16 +139,55 @@ async def push_cookies(psid: str, psidts: str) -> bool:
     return False
 
 
-async def run() -> None:
-    had_profile = restore_profile()
-    if not had_profile:
+async def _cycle(ctx, page, last: tuple[str, str] | None) -> tuple[str, str] | None:
+    """One refresh: load the page, read the jar, push the cookies if they moved."""
+    # A real navigation, which is what makes Google reissue the rotating cookie --
+    # reading the jar without loading anything would never refresh it.
+    await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
+    await page.wait_for_timeout(4_000)
+
+    jar = {c["name"]: c["value"] for c in await ctx.cookies()}
+    missing = [n for n in WANTED if n not in jar]
+    if missing:
+        # Signed out: the profile is no longer authenticated and only a human can
+        # fix that. Said plainly rather than retried silently forever.
         log.error(
-            "no logged-in profile available. Nothing here can log in -- produce a "
-            "profile by signing in once (see keeper/README.md) and upload it to "
-            "r2://%s. Sleeping rather than spinning.",
+            "profile is not signed in (missing %s). Re-do the one-time login and "
+            "re-upload the profile.",
+            ", ".join(missing),
+        )
+        return last
+
+    pair = (jar["__Secure-1PSID"], jar["__Secure-1PSIDTS"])
+    if pair == last:
+        log.debug("cookies unchanged")
+        return last
+
+    log.info("cookies changed; handing them to the sidecar")
+    if await push_cookies(*pair):
+        save_profile()
+        return pair
+    return last
+
+
+async def run() -> None:
+    # No browser until there is a profile to drive.
+    #
+    # Chromium idles at ~650MB, and this container's whole job is to use *a
+    # logged-in session*. Launching it to sit in a failing loop with no profile
+    # spent two thirds of the memory limit achieving nothing -- measured in
+    # production before this changed. Polling R2 costs one HTTP request a minute
+    # and means uploading the profile is enough to start it: no restart, no deploy.
+    while not restore_profile():
+        log.error(
+            "no logged-in profile at r2://%s. Nothing here can log in -- sign in "
+            "once (keeper/README.md) and upload it; this will pick it up within a "
+            "minute. Not launching a browser until then.",
             PROFILE_KEY,
         )
+        await asyncio.sleep(60)
 
+    log.info("profile present; starting the browser")
     async with async_playwright() as pw:
         # A persistent context, not a fresh browser: the whole point is to keep
         # using one profile's session rather than starting a new anonymous one
@@ -163,35 +202,9 @@ async def run() -> None:
 
         while True:
             try:
-                # A real navigation, which is what makes Google reissue the
-                # rotating cookie -- reading the jar without loading anything
-                # would never refresh it.
-                await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
-                await page.wait_for_timeout(4_000)
-
-                jar = {c["name"]: c["value"] for c in await ctx.cookies()}
-                missing = [n for n in WANTED if n not in jar]
-                if missing:
-                    # Signed out: the profile is no longer authenticated and only
-                    # a human can fix that. Said plainly rather than retried
-                    # silently forever.
-                    log.error(
-                        "profile is not signed in (missing %s). Re-do the one-time "
-                        "login and re-upload the profile.",
-                        ", ".join(missing),
-                    )
-                else:
-                    pair = (jar["__Secure-1PSID"], jar["__Secure-1PSIDTS"])
-                    if pair != last:
-                        log.info("cookies changed; handing them to the sidecar")
-                        if await push_cookies(*pair):
-                            last = pair
-                            save_profile()
-                    else:
-                        log.debug("cookies unchanged")
+                last = await _cycle(ctx, page, last)
             except Exception as e:  # noqa: BLE001 - a bad cycle must not kill the loop
                 log.error("refresh cycle failed: %s", e)
-
             await asyncio.sleep(REFRESH_SECONDS)
 
 

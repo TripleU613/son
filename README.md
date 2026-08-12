@@ -101,6 +101,8 @@ src/
   components/       gallery, card, detail, upload
 
 sidecar/             Python: Gemini via browser cookies (screen + square)
+keeper/              Python: a logged-in Chromium that keeps those cookies fresh
+scripts/build-check.sh  builds the container images on a host that has Docker
 Dockerfile           multi-stage build; pinned base digests, pinned Tailwind binary
 docker-compose.yml   deployed as-is to bulky-server; app + cloudflared, no volumes
 deploy/known_hosts   bulky-server's pinned SSH host key (public info, safe to commit)

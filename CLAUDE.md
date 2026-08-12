@@ -20,6 +20,24 @@ cargo test  --no-default-features --features ssr
 the same files (`#[cfg(feature = "hydrate")]` is everywhere), so one passing
 tells you nothing about the other.
 
+### Dockerfiles cannot be tested here, so test them elsewhere
+
+There is no container runtime on this machine and no sudo to install one, so a
+`RUN` step is only exercised by CI — which is how three consecutive CI runs were
+burned (a base digest that did not resolve, then `awscli` having no installation
+candidate on the Playwright base).
+
+`scripts/build-check.sh` pipes each build context over SSH to **bulky-server**,
+which does have Docker, and builds there. ~30s for the sidecar, ~3min for the
+keeper. Run it whenever a Dockerfile or a requirements file changes. It is not in
+the pre-push hook on purpose: pulling a 1.9GB base is the wrong tax on every push.
+
+The pre-push hook (`.githooks/pre-push`, enable with
+`git config core.hooksPath .githooks`) covers everything else, including that
+pinned image digests actually resolve — fetch the manifest **by digest** with the
+manifest-list Accept headers, or you get a real-but-wrong digest that fails the
+build with a bare "not found".
+
 ### Then reproduce the container, because your machine is not it
 
 A plain local build passes with things the image does not have. This exact gap
