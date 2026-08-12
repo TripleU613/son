@@ -97,6 +97,34 @@ def _r2():
     )
 
 
+def _is_runtime_junk(name: str) -> bool:
+    """Chromium's per-launch scratch, which must not be carried between containers.
+
+    The Singleton* entries are symlinks to an absolute path under /tmp naming the
+    machine and process that made them; they are recreated on every launch, and
+    restoring one either fails the extract or points the new browser at a socket
+    that does not exist.
+    """
+    base = name.rsplit("/", 1)[-1]
+    return base.startswith("Singleton")
+
+
+def _restorable(tar: tarfile.TarFile):
+    """Members worth restoring: no symlinks, no hardlinks, no runtime scratch."""
+    for member in tar.getmembers():
+        if member.issym() or member.islnk() or _is_runtime_junk(member.name):
+            continue
+        yield member
+
+
+def _archivable(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """The same exclusions on the way out, so a fresh archive is clean to begin
+    with rather than relying on the reader to cope."""
+    if info.issym() or info.islnk() or _is_runtime_junk(info.name):
+        return None
+    return info
+
+
 def restore_profile() -> bool:
     """Pull the profile out of R2. False means "no profile yet, log in first"."""
     s3 = _r2()
@@ -114,11 +142,24 @@ def restore_profile() -> bool:
         return False
 
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    with tarfile.open(dest, "r:gz") as tar:
-        # filter="data" refuses absolute paths and traversal in member names. The
-        # archive is ours, but an extract that trusts its input is a bad habit to
-        # write down.
-        tar.extractall(PROFILE_DIR, filter="data")
+    try:
+        with tarfile.open(dest, "r:gz") as tar:
+            # filter="data" refuses absolute paths and traversal. Keeping it, and
+            # skipping the members it would refuse, rather than dropping it:
+            # Chromium's profile contains SingletonSocket/SingletonLock/
+            # SingletonCookie, which are symlinks to absolute paths outside the
+            # profile. The filter raised OutsideDestinationError on the first of
+            # them and aborted the whole restore -- so a container restart lost a
+            # session that was sitting safely in R2, which is the one thing this
+            # function exists to prevent.
+            tar.extractall(PROFILE_DIR, members=_restorable(tar), filter="data")
+    except Exception as e:  # noqa: BLE001
+        # A corrupt or unreadable archive is "no profile", not a crash. Raising here
+        # killed the container before the browser was ever started, so nobody could
+        # even sign in again to recover.
+        log.error("stored profile could not be unpacked (%s); treating as absent", e)
+        os.unlink(dest)
+        return False
     os.unlink(dest)
     log.info("profile restored from R2")
     return True
@@ -133,7 +174,7 @@ def save_profile() -> None:
         dest = tmp.name
     try:
         with tarfile.open(dest, "w:gz") as tar:
-            tar.add(PROFILE_DIR, arcname=".")
+            tar.add(PROFILE_DIR, arcname=".", filter=_archivable)
         s3.upload_file(dest, os.environ["R2_BUCKET"], PROFILE_KEY)
         log.info("profile saved to R2")
     except Exception as e:  # noqa: BLE001
