@@ -185,19 +185,34 @@ pub async fn oembed(Query(q): Query<OEmbedQuery>) -> impl IntoResponse {
         resp.height = w + EMBED_BAR_H;
         resp.html = Some(embed_iframe(&embed_url, &son.title, w, w + EMBED_BAR_H));
     } else {
-        // A consumer that asked for something no larger than a thumbnail gets
-        // the thumbnail: serving a 12MB original into a 480px slot is R2 egress
-        // spent on pixels nobody sees.
-        let cap = [q.maxwidth, q.maxheight].into_iter().flatten().min();
-        let small = cap.is_some_and(|c| c <= crate::storage::THUMB_MAX_EDGE) && tw > 0;
-        if small {
-            resp.url = Some(son.thumb_url);
-            resp.width = tw;
-            resp.height = th;
-        } else {
-            resp.url = Some(son.orig_url);
-            resp.width = son.width;
-            resp.height = son.height;
+        // The cap is whichever of the two bounds binds first; a son is a
+        // rectangle and either edge can be the one that does not fit.
+        let cap = [q.maxwidth, q.maxheight]
+            .into_iter()
+            .flatten()
+            .min()
+            .filter(|c| *c < son.width || *c < son.height);
+        match cap {
+            Some(c) => {
+                // Reported at the size asked for, not the source's own size:
+                // a `width` above `maxwidth` is the one thing this parameter
+                // exists to prevent. And below a thumbnail's edge, serve the
+                // thumbnail -- a 12MB original decoded into a 300px slot is R2
+                // egress spent on pixels nobody sees.
+                let (dw, dh) = fit_within(son.width, son.height, c);
+                resp.url = Some(if c <= crate::storage::THUMB_MAX_EDGE && tw > 0 {
+                    son.thumb_url
+                } else {
+                    son.orig_url
+                });
+                resp.width = dw;
+                resp.height = dh;
+            }
+            None => {
+                resp.url = Some(son.orig_url);
+                resp.width = son.width;
+                resp.height = son.height;
+            }
         }
     }
 
@@ -283,7 +298,10 @@ pub async fn embed(Path(id): Path<String>) -> impl IntoResponse {
         Ok(_) => return embed_gone(StatusCode::NOT_FOUND, "This son is no longer here."),
         Err(e) => {
             tracing::error!("embed lookup failed for {id}: {e}");
-            return embed_gone(StatusCode::INTERNAL_SERVER_ERROR, "This son is unavailable.");
+            return embed_gone(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "This son is unavailable.",
+            );
         }
     };
 
@@ -293,16 +311,16 @@ pub async fn embed(Path(id): Path<String>) -> impl IntoResponse {
     // `storage` actually produced. Skipped when the "thumbnail" is an upscale
     // of a small son, where the original is the smaller file of the two.
     let (tw, _) = fit_within(son.width, son.height, crate::storage::THUMB_MAX_EDGE);
-    let srcset = (tw > 0 && tw < son.width)
-        .then(|| {
-            format!(
-                " srcset=\"{thumb} {tw}w, {orig} {ow}w\" sizes=\"100vw\"",
-                thumb = attr_escape(&son.thumb_url),
-                orig = attr_escape(&son.orig_url),
-                ow = son.width,
-            )
-        })
-        .unwrap_or_default();
+    let srcset = if tw > 0 && tw < son.width {
+        format!(
+            " srcset=\"{thumb} {tw}w, {orig} {ow}w\" sizes=\"100vw\"",
+            thumb = attr_escape(&son.thumb_url),
+            orig = attr_escape(&son.orig_url),
+            ow = son.width,
+        )
+    } else {
+        String::new()
+    };
 
     let body = format!(
         "<a class=\"se-card\" href=\"{page}\" target=\"_blank\" rel=\"noopener\">\

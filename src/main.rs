@@ -316,7 +316,10 @@ mod cache {
 
         #[test]
         fn hashed_pkg_assets_are_immutable_and_unhashed_ones_are_not() {
-            assert_eq!(cache_control("/pkg/soncollection.abc123.css", true), IMMUTABLE);
+            assert_eq!(
+                cache_control("/pkg/soncollection.abc123.css", true),
+                IMMUTABLE
+            );
             // The `cargo leptos watch` case: one fixed filename, new contents
             // every edit. A year here is unrecoverable.
             assert_eq!(cache_control("/pkg/soncollection.css", false), "no-cache");
@@ -366,7 +369,10 @@ mod cache {
         #[test]
         fn the_specific_class_wins_over_the_general_one() {
             assert_eq!(cache_control("/api/v1/sons/x", true), "public, max-age=60");
-            assert_eq!(cache_control("/favicon-32.png", true), "public, max-age=86400");
+            assert_eq!(
+                cache_control("/favicon-32.png", true),
+                "public, max-age=86400"
+            );
             assert_eq!(
                 cache_control("/apple-touch-icon.png", false),
                 "public, max-age=86400"

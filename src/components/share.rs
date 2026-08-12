@@ -28,6 +28,9 @@ use leptos::prelude::*;
 use icondata_lu::LuCodeXml;
 
 use crate::components::icon::{Ico, LuCheck, LuLink, LuShare2};
+// Only the click handler touches these, and the click handler only exists in
+// the wasm build -- there is no clipboard to write to on the server.
+#[cfg(feature = "hydrate")]
 use crate::seo::{embed_snippet, embed_url_from_page_url};
 
 /// How long the confirmation stays up after a copy, in milliseconds. Long
