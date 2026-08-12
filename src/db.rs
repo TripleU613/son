@@ -748,6 +748,70 @@ pub async fn get_user(id: &str) -> anyhow::Result<Option<User>> {
 /// one demotes them. The env var is the single source of truth -- a manual
 /// `UPDATE users SET is_admin = 1` would be silently reverted at their next
 /// login, which is the intended behaviour.
+/// The identity to publish for an account whose real one should stay private.
+///
+/// `PSEUDONYMS` holds `email=Display Name` pairs, comma-separated, each with an
+/// optional `|avatar-url` after the name. An entry with no avatar publishes none
+/// at all, which makes the UI fall back to the initial badge it already draws for
+/// contributors who never had a Google picture -- so there is no image to host
+/// and nothing to keep alive.
+///
+/// An env var rather than a users column, for two reasons.
+///
+/// The first is the same reason `ADMIN_EMAILS` is one: the mapping names a real
+/// person's account and this repository is public.
+///
+/// The second is that a column would not work. `upsert_user` rewrites
+/// display_name and avatar_url from Google's response on *every* sign-in, so a
+/// row edited by hand looks corrected right up until the next login puts the real
+/// name straight back -- the identical trap CLAUDE.md documents for a manual
+/// `UPDATE users SET is_admin = 1`. Substituting here, at the point the row is
+/// written, is what makes it stick: the real name never enters the database at
+/// all, so nothing downstream has to remember to hide it.
+///
+/// `email` is deliberately NOT substituted. It is never sent to a client --
+/// neither `User` nor `Uploader` has the field -- and it is what `is_admin_email`
+/// matches on, so replacing it would quietly cost this account its admin rights
+/// at the next login.
+fn pseudonym_for(email: &str) -> Option<(String, Option<String>)> {
+    parse_pseudonym(&std::env::var("PSEUDONYMS").unwrap_or_default(), email)
+}
+
+/// The parsing half, split out so it can be tested without touching the
+/// environment. `std::env::set_var` mutates process-global state that every
+/// other test in this binary shares, and cargo runs them in parallel -- a test
+/// that sets `PSEUDONYMS` would be reaching into whatever else happened to be
+/// running at the time.
+fn parse_pseudonym(raw: &str, email: &str) -> Option<(String, Option<String>)> {
+    let target = email.trim().to_ascii_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    for entry in raw.split(',') {
+        let Some((who, identity)) = entry.split_once('=') else {
+            continue;
+        };
+        if who.trim().to_ascii_lowercase() != target {
+            continue;
+        }
+        let (name, avatar) = match identity.split_once('|') {
+            Some((n, a)) => (n.trim(), a.trim()),
+            None => (identity.trim(), ""),
+        };
+        // A blank name would publish an empty byline, which is worse than
+        // publishing the real one because it looks like a bug rather than a
+        // choice. Treat it as no entry.
+        if name.is_empty() {
+            continue;
+        }
+        return Some((
+            name.to_string(),
+            (!avatar.is_empty()).then(|| avatar.to_string()),
+        ));
+    }
+    None
+}
+
 fn is_admin_email(email: &str) -> bool {
     let email = email.trim().to_ascii_lowercase();
     std::env::var("ADMIN_EMAILS")
@@ -765,6 +829,14 @@ pub async fn upsert_user(
 ) -> anyhow::Result<User> {
     let id = uuid::Uuid::new_v4().to_string();
     let admin = i64::from(is_admin_email(email));
+    // Substituted before the row is built, not after it is read, so the real
+    // name and picture never reach the database in the first place. `admin` is
+    // computed from the untouched `email` above, which is why signing in under a
+    // pseudonym still grants admin.
+    let (display_name, avatar_url) = match pseudonym_for(email) {
+        Some((name, avatar)) => (name, avatar),
+        None => (display_name.to_string(), avatar_url.map(str::to_string)),
+    };
     let sql = format!(
         "INSERT INTO users (id, google_sub, email, display_name, avatar_url, is_admin, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?7, ?6) \
@@ -1081,6 +1153,69 @@ mod tests {
         assert_eq!(public_first_name("さくら"), "さくら");
         assert_eq!(public_first_name(""), "");
         assert_eq!(public_first_name("   "), "   ");
+    }
+
+    #[test]
+    fn pseudonym_replaces_name_and_drops_the_picture() {
+        let raw = "someone@example.com=sononymous";
+        assert_eq!(
+            parse_pseudonym(raw, "someone@example.com"),
+            Some(("sononymous".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn pseudonym_can_carry_its_own_avatar() {
+        let raw = "a@b.com=Nobody|https://example.com/x.png";
+        assert_eq!(
+            parse_pseudonym(raw, "a@b.com"),
+            Some((
+                "Nobody".to_string(),
+                Some("https://example.com/x.png".to_string())
+            ))
+        );
+    }
+
+    /// Google reports the address in whatever case the account was created with,
+    /// so matching has to be case- and whitespace-insensitive on both sides or
+    /// the substitution silently stops applying.
+    #[test]
+    fn pseudonym_matching_ignores_case_and_padding() {
+        let raw = "  Someone@Example.COM = Quiet Son  ";
+        assert_eq!(
+            parse_pseudonym(raw, "someone@example.com"),
+            Some(("Quiet Son".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn picks_the_right_entry_out_of_several() {
+        let raw = "x@y.com=First,target@z.com=Second,q@r.com=Third";
+        assert_eq!(
+            parse_pseudonym(raw, "target@z.com"),
+            Some(("Second".to_string(), None))
+        );
+    }
+
+    /// Everything that is not a match falls through to None, which publishes the
+    /// real Google name. That is the safe direction for a bug in *this* function
+    /// to fail, but it means the entry has to be right -- hence the cases.
+    #[test]
+    fn anything_unmatched_or_malformed_yields_no_substitution() {
+        for (raw, email) in [
+            ("", "a@b.com"),                 // unset
+            ("a@b.com=Name", "other@b.com"), // different person
+            ("a@b.com", "a@b.com"),          // no '=' at all
+            ("a@b.com=", "a@b.com"),         // blank name
+            ("a@b.com=   ", "a@b.com"),      // whitespace-only name
+            ("a@b.com=Name", ""),            // no email to match
+        ] {
+            assert_eq!(
+                parse_pseudonym(raw, email),
+                None,
+                "expected no substitution for raw={raw:?} email={email:?}"
+            );
+        }
     }
 
     #[test]

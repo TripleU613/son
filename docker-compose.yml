@@ -98,6 +98,11 @@ services:
       # Comma-separated. Re-checked at every Google login, so this is the source of
       # truth for who is an admin -- see db::upsert_user.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # email=Display Name pairs, comma-separated, each with an optional
+      # |avatar-url. Substituted into the users row at sign-in so the real Google
+      # name and picture never reach the database. Unset = everyone is published
+      # under the name Google returns.
+      PSEUDONYMS: ${PSEUDONYMS:-}
       # Absent -> no analytics script is emitted at all. Cloudflare's edge-side
       # request/bandwidth/threat numbers need nothing here.
       CF_ANALYTICS_TOKEN: ${CF_ANALYTICS_TOKEN:-}
