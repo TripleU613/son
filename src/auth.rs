@@ -61,6 +61,32 @@ fn secure_cookies() -> bool {
         .unwrap_or(false)
 }
 
+/// Stamp the attributes that define *which* cookie a `session` header refers to.
+///
+/// Both the cookie that starts a session and the one that clears it go through
+/// here, because logout was silently a no-op for exactly as long as they were
+/// built independently.
+///
+/// - `Path` is the load-bearing one. A browser identifies a cookie by
+///   name + domain + path, and an omitted `Path` does not mean "/" — it defaults
+///   to the directory of the request URI, which for `POST /auth/logout` is
+///   `/auth`. So a clearing header without it expired a `/auth`-scoped cookie
+///   that never existed and left the real `Path=/` one untouched: the browser
+///   kept sending the session, the redirect re-rendered signed-in, and only
+///   manually deleting the cookie signed you out.
+/// - `Domain` is deliberately never set on either side. Both stay host-only,
+///   which is another way of saying they match.
+/// - `HttpOnly`, `SameSite` and `Secure` are *not* part of cookie identity, so
+///   they are not what broke logout. They are set here anyway so the set/clear
+///   pair cannot drift again — the next attribute added to a session cookie is
+///   added to both by construction, whether or not the browser matches on it.
+fn apply_session_attrs(c: &mut Cookie<'static>) {
+    c.set_path("/");
+    c.set_http_only(true);
+    c.set_same_site(SameSite::Lax);
+    c.set_secure(secure_cookies());
+}
+
 fn parse_jar(cookie_header: Option<&str>) -> CookieJar {
     let mut jar = CookieJar::new();
     if let Some(header) = cookie_header {
@@ -199,10 +225,7 @@ pub async fn complete_login(
 
     let mut session_jar = CookieJar::new();
     let mut sc = Cookie::new(SESSION_COOKIE, user.id.clone());
-    sc.set_path("/");
-    sc.set_http_only(true);
-    sc.set_same_site(SameSite::Lax);
-    sc.set_secure(secure_cookies());
+    apply_session_attrs(&mut sc);
     sc.set_max_age(cookie::time::Duration::days(365));
     session_jar.private_mut(&key).add(sc);
     let session_set_cookie = session_jar.delta().next().unwrap().to_string();
@@ -276,9 +299,21 @@ pub async fn current_user(cookie_header: Option<&str>) -> anyhow::Result<Option<
 }
 
 /// `Set-Cookie` value that clears the session, for `/auth/logout`.
+///
+/// `add_original` then `remove` rather than a hand-written expired cookie: the
+/// jar only emits a removal for a cookie it believes exists, and it is what
+/// decides the `Max-Age=0` + past-`Expires` pair that old browsers need. It
+/// preserves the attributes of the cookie handed to it, which is why
+/// `apply_session_attrs` has to run *before* it — see that function for why a
+/// mismatch here does not fail loudly, it just quietly never signs anyone out.
+///
+/// Not routed through the private jar: there is no value to encrypt, and
+/// `session_user_id` already treats an undecryptable or empty cookie as signed
+/// out, so a browser that ignores the removal still lands on "not logged in".
 pub fn logout_set_cookie() -> String {
     let mut jar = CookieJar::new();
-    let c = Cookie::new(SESSION_COOKIE, "");
+    let mut c = Cookie::new(SESSION_COOKIE, "");
+    apply_session_attrs(&mut c);
     jar.add_original(c.clone());
     jar.remove(c);
     jar.delta().next().unwrap().to_string()
@@ -316,4 +351,54 @@ struct GoogleProfile {
     email: String,
     name: String,
     picture: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the clearing cookie to the cookie it has to clear.
+    ///
+    /// This is a regression test for a bug that produced no error anywhere: a
+    /// 302 with a well-formed `Set-Cookie` that the browser accepted and filed
+    /// under a different path, leaving the session live. Nothing but comparing
+    /// the two headers would have caught it, so that comparison lives here.
+    #[test]
+    fn clearing_cookie_matches_the_session_cookie_the_browser_stored() {
+        // Stands in for what `complete_login` sets. The value and `Max-Age`
+        // differ by design and are not part of a cookie's identity.
+        let mut set = Cookie::new(SESSION_COOKIE, "some-user-id");
+        apply_session_attrs(&mut set);
+
+        let cleared = Cookie::parse(logout_set_cookie()).expect("clearing cookie must parse");
+
+        assert_eq!(cleared.name(), set.name());
+        assert_eq!(
+            cleared.path(),
+            set.path(),
+            "Path is what decides whether the browser deletes anything at all"
+        );
+        assert_eq!(cleared.domain(), set.domain());
+        assert_eq!(cleared.same_site(), set.same_site());
+        // Compared as the browser sees them, not as the builder recorded them:
+        // `set_secure(false)` is `Some(false)` in memory but serializes to no
+        // attribute at all, which reads back as `None`. Both mean "not secure",
+        // and locally (`SITE_ORIGIN=http://...`) that is the branch taken.
+        assert_eq!(
+            cleared.secure().unwrap_or(false),
+            set.secure().unwrap_or(false)
+        );
+        assert_eq!(
+            cleared.http_only().unwrap_or(false),
+            set.http_only().unwrap_or(false)
+        );
+
+        // Matching the right cookie is only half of it; it also has to expire.
+        assert_eq!(cleared.value(), "");
+        assert_eq!(
+            cleared.max_age(),
+            Some(cookie::time::Duration::seconds(0)),
+            "Max-Age=0 is the removal; without it this just rewrites the session"
+        );
+    }
 }
