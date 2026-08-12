@@ -701,6 +701,48 @@ pub fn Upload() -> impl IntoView {
                             {move || step.get().map(phase).unwrap_or_default()}
                         </p>
 
+                        // The one thing the progress display could not say:
+                        // `upload_route::upload` drains the multipart, spawns the
+                        // pipeline with `tokio::spawn` and answers 202, so the
+                        // work is not attached to this tab at all. People sat
+                        // through fifty seconds of a scrim not knowing that.
+                        //
+                        // Not shown during `Receiving`, which is the one phase
+                        // where it would be a lie: the body is still on its way
+                        // up and no job exists yet, so closing the tab there
+                        // really does cancel everything. `step` is the only
+                        // signal that can tell those apart without touching the
+                        // poll loop -- the server's first report is
+                        // `Fingerprinting`, so anything past `Receiving` is proof
+                        // the bytes landed and a spawned task owns them now.
+                        //
+                        // The second clause is the honest half and has to stay:
+                        // nothing notifies anybody. The result exists only in
+                        // this page's poll loop, and `jobs::RETAIN` drops it
+                        // after five minutes, so a visitor who leaves has to go
+                        // and find their son in the gallery.
+                        //
+                        // Deliberately outside the live region above rather than
+                        // a second line inside it: it is reassurance that does
+                        // not change, and in there it would be re-announced
+                        // every time the phase word did.
+                        //
+                        // The gradient is the filename strip's, for the same
+                        // reason: this edge sits over whatever image was picked,
+                        // and 13px `ink-2` on `black/60` alone measures 2.8:1
+                        // over a white photograph -- well under the 4.5:1 the
+                        // palette is built to. The two never collide, because
+                        // the filename strip is hidden exactly while this shows.
+                        // The bar is painted after it, so it lands on the darkest
+                        // part of the gradient rather than on the photograph.
+                        <Show when=move || {
+                            busy.get() && step.get().is_some_and(|s| s != Step::Receiving)
+                        }>
+                            <p class="m-0 absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-4 pb-3 pt-10 text-center text-[0.8125rem] text-ink-2">
+                                "Closing the tab won't stop it — you just won't see the link when it's done."
+                            </p>
+                        </Show>
+
                         // The bar is the only computed visual on this page and
                         // its width is an inline style, never a class: a
                         // `w-[37%]` assembled at runtime is invisible to the

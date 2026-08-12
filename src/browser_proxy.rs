@@ -88,25 +88,95 @@ code{background:#171a20;padding:.15em .4em;border-radius:4px}a{color:#ffcc33}</s
     }
 
     // autoconnect + reconnect so the page is usable without touching noVNC's own
-    // connection dialog, and resize=remote so the desktop matches the window
-    // rather than being scrolled around.
+    // connection dialog.
+    //
+    // This page carries a little hand-written JavaScript, which the rest of the
+    // project does not. It is unavoidable and contained: noVNC is a third-party
+    // canvas app, and the only way to drive it -- summon a keyboard, send
+    // keystrokes -- is to call into it. The iframe is same-origin because it is
+    // proxied through this host, which is what makes that possible at all.
+    //
+    // The typing bar exists because this is used from a phone. Typing an email and
+    // password onto a remote canvas through a soft keyboard is miserable: no
+    // autofill, no password manager, and every mistake is invisible. Typing into an
+    // ordinary <input> and sending the result as keystrokes gives back autocorrect,
+    // paste, and the ability to see what you typed before committing it.
     Html(
-        r#"<!doctype html><meta charset=utf-8>
+        r##"<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>sign-in browser — son collection</title>
-<style>html,body{margin:0;height:100%;background:#08090b;color:#f4f4f5;
-font:14px/1.5 system-ui}header{display:flex;gap:1rem;align-items:center;
-padding:.6rem .9rem;border-bottom:1px solid #292d35}a{color:#ffcc33}
-iframe{border:0;width:100%;height:calc(100% - 44px);display:block}</style>
-<header><strong>Sign in to Google in this window.</strong>
-<span style="color:#a6a8b0">Saved automatically; screening starts within a minute.
-Nothing to switch off afterwards.</span>
-<a href="/admin" style="margin-left:auto">admin</a></header>
-<!-- resize=scale, not remote: the display is deliberately phone-shaped (see
-     keeper/entrypoint.sh), so it should be scaled to whatever screen is looking at
-     it rather than resized to match, which would undo the phone layout Google
-     serves. -->
-<iframe src="/admin/browser/vnc.html?path=admin/browser/websockify&autoconnect=1&reconnect=1&resize=scale&quality=6"
-        allow="clipboard-read; clipboard-write"></iframe>"#,
+<style>
+html,body{margin:0;height:100%;background:#08090b;color:#f4f4f5;
+  font:14px/1.4 system-ui;-webkit-text-size-adjust:100%}
+#bar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;padding:.5rem;
+  border-bottom:1px solid #292d35;background:#0d0f12}
+#bar input{flex:1 1 8rem;min-width:0;padding:.55rem .6rem;border-radius:8px;
+  border:1px solid #292d35;background:#171a20;color:#f4f4f5;font-size:16px}
+#bar button{padding:.55rem .7rem;border-radius:8px;border:1px solid #292d35;
+  background:#171a20;color:#f4f4f5;font-size:14px;white-space:nowrap}
+#bar button.go{background:#ffcc33;color:#0a0a0b;border-color:#ffcc33;font-weight:600}
+#hint{width:100%;color:#737780;font-size:12px}
+iframe{border:0;width:100%;height:calc(100% - 96px);display:block}
+a{color:#ffcc33}
+</style>
+<div id=bar>
+  <input id=t placeholder="Type here, then Send" autocapitalize=off autocomplete=off spellcheck=false>
+  <button class=go id=send>Send</button>
+  <button id=tab>Tab</button>
+  <button id=enter>Enter</button>
+  <button id=kbd>⌨</button>
+  <a href="/admin" style="margin-left:auto">admin</a>
+  <span id=hint>Sign in to Google below. Saved automatically; screening starts within a minute.</span>
+</div>
+<iframe id=v src="/admin/browser/vnc.html?path=admin/browser/websockify&autoconnect=1&reconnect=1&resize=scale&quality=6"></iframe>
+<script>
+const frame = document.getElementById('v');
+const field = document.getElementById('t');
+
+// noVNC's own UI object, once its page has loaded. Same-origin via the proxy.
+const ui = () => { try { return frame.contentWindow.UI; } catch (e) { return null; } };
+const rfb = () => { const u = ui(); return u && u.rfb; };
+
+// X11 keysyms. Printable characters are their own code point; these two are not.
+const XK_Tab = 0xff09, XK_Return = 0xff0d;
+
+function key(sym) {
+  const r = rfb();
+  if (!r) { return false; }
+  r.sendKey(sym, null);
+  return true;
+}
+
+function type(text) {
+  const r = rfb();
+  if (!r) { alert('The browser is still connecting — try again in a moment.'); return; }
+  // One keysym per code point, so accented characters and emoji survive; a
+  // per-character loop is also what lets Tab and Enter be separate buttons rather
+  // than magic characters inside the text.
+  for (const ch of text) { r.sendKey(ch.codePointAt(0), null); }
+}
+
+document.getElementById('send').onclick = () => {
+  if (!field.value) { return; }
+  type(field.value);
+  // Cleared straight away: this field holds a password for as long as it is on
+  // screen, and leaving it there invites sending it twice.
+  field.value = '';
+  field.focus();
+};
+// Enter on the phone keyboard sends and then presses Enter remotely, which is what
+// finishing a login field means.
+field.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('send').click(); key(XK_Return); }
+});
+document.getElementById('tab').onclick = () => key(XK_Tab);
+document.getElementById('enter').onclick = () => key(XK_Return);
+// noVNC's own soft-keyboard toggle, for anyone who would rather type on the canvas.
+document.getElementById('kbd').onclick = () => {
+  const u = ui();
+  if (u && u.toggleVirtualKeyboard) { u.toggleVirtualKeyboard(); }
+};
+</script>"##,
     )
     .into_response()
 }

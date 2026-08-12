@@ -5,6 +5,8 @@
 //! streaming every thumbnail through the Rust process would waste bandwidth on
 //! bytes a CDN edge already caches.
 
+use aws_sdk_s3::config::retry::RetryConfig;
+use aws_sdk_s3::config::timeout::TimeoutConfig;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
@@ -57,6 +59,25 @@ impl R2 {
             ))
             // R2 does not support virtual-host-style addressing for these keys.
             .force_path_style(true)
+            // Retries, because a single failed PUT used to lose an upload.
+            //
+            // An upload came back "failed to upload" with `R2 put ... failed:
+            // dispatch failure` -- a transient DNS failure inside the container
+            // network, at the same moment the Gemini sidecar could not resolve
+            // gemini.google.com either. A dispatch failure is exactly the class of
+            // error worth retrying: nothing reached R2, so there is nothing to be
+            // idempotent about, and by then the upload has already cost a Gemini
+            // image generation. The default policy gave up too early for a network
+            // that hiccups.
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            // A bounded per-attempt timeout, so a stalled connection is retried
+            // rather than hanging the whole upload job behind it.
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .operation_attempt_timeout(std::time::Duration::from_secs(20))
+                    .operation_timeout(std::time::Duration::from_secs(90))
+                    .build(),
+            )
             .build();
 
         Ok(Some(Self {
