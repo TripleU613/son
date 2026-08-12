@@ -87,16 +87,30 @@ def _accounts() -> list[tuple[str, str]]:
     return pairs
 
 
+# How many consecutive failures make an account count as unusable in /health.
+# More than one, because a single 1100 is often transient; small, because the
+# whole point is to notice quickly.
+UNHEALTHY_AFTER = 3
+
+
 class Pool:
     """Round-robin over initialised clients, with a lock per client.
 
     A GeminiClient holds one conversation-bearing HTTP session, so two requests
     sharing one concurrently interleave their state. The lock makes each client
     serial while still letting N accounts work in parallel.
+
+    Tracks consecutive failures per client, because `init()` succeeding proves
+    almost nothing: with expired cookies it still reports "Gemini client
+    initialized successfully", logs `Account status: UNAUTHENTICATED` as a
+    warning, and then fails every single call with error 1100. A healthcheck
+    counting initialised clients therefore said "healthy" through a total
+    outage -- observed in production, which is what prompted this.
     """
 
     def __init__(self) -> None:
         self.clients: list[tuple[GeminiClient, asyncio.Lock]] = []
+        self.failures: list[int] = []
         self._ring = itertools.cycle([0])
 
     async def start(self) -> None:
@@ -112,16 +126,34 @@ class Pool:
                 log.error("account %d failed to initialise: %s", i, e)
                 continue
             self.clients.append((client, asyncio.Lock()))
+            self.failures.append(0)
             log.info("account %d ready", i)
 
         if not self.clients:
             log.warning("no usable Gemini accounts; every request will return 502")
         self._ring = itertools.cycle(range(len(self.clients) or 1))
 
-    def next(self) -> tuple[GeminiClient, asyncio.Lock] | None:
+    def next(self) -> tuple[int, GeminiClient, asyncio.Lock] | None:
         if not self.clients:
             return None
-        return self.clients[next(self._ring)]
+        i = next(self._ring)
+        client, lock = self.clients[i]
+        return i, client, lock
+
+    def succeeded(self, i: int) -> None:
+        self.failures[i] = 0
+
+    def failed(self, i: int) -> None:
+        self.failures[i] += 1
+        if self.failures[i] == UNHEALTHY_AFTER:
+            log.error(
+                "account %d has failed %d calls in a row; reporting unhealthy",
+                i,
+                UNHEALTHY_AFTER,
+            )
+
+    def usable(self) -> int:
+        return sum(1 for f in self.failures if f < UNHEALTHY_AFTER)
 
 
 pool = Pool()
@@ -134,8 +166,16 @@ async def _startup() -> None:
 
 
 @app.get("/health")
-async def health() -> dict:
-    return {"accounts": len(pool.clients)}
+async def health() -> Response:
+    """`accounts` is what the container healthcheck reads, and it counts accounts
+    that are actually answering -- not accounts that merely started up. 503 as
+    well, so anything checking status rather than the body also sees it."""
+    body = {
+        "accounts": pool.usable(),
+        "initialised": len(pool.clients),
+        "consecutive_failures": pool.failures,
+    }
+    return JSONResponse(body, status_code=200 if pool.usable() else 503)
 
 
 async def _with_temp(image: UploadFile):
@@ -149,13 +189,13 @@ async def _with_temp(image: UploadFile):
     entry = pool.next()
     if entry is None:
         return None
-    client, lock = entry
+    idx, client, lock = entry
     data = await image.read()
     fd, src = tempfile.mkstemp(suffix=".png", dir="/tmp")
     os.close(fd)
     with open(src, "wb") as f:
         f.write(data)
-    return client, lock, src
+    return idx, client, lock, src
 
 
 @app.post("/judge")
@@ -165,13 +205,15 @@ async def judge(image: UploadFile = File(...)) -> Response:
     got = await _with_temp(image)
     if got is None:
         return JSONResponse({"reason": "no Gemini account available"}, status_code=502)
-    client, lock, src = got
+    idx, client, lock, src = got
     try:
         async with lock:
             judged = await client.generate_content(
                 JUDGE_PROMPT, files=[src], model=JUDGE_MODEL, temporary=True
             )
+        pool.succeeded(idx)
     except Exception as e:  # noqa: BLE001
+        pool.failed(idx)
         log.error("judge call failed: %s", e)
         return JSONResponse({"reason": f"gemini judge failed: {e}"}, status_code=502)
     finally:
@@ -195,9 +237,11 @@ async def square(image: UploadFile = File(...)) -> Response:
     got = await _with_temp(image)
     if got is None:
         return JSONResponse({"reason": "no Gemini account available"}, status_code=502)
-    client, lock, src = got
+    idx, client, lock, src = got
     try:
-        return await _square(client, lock, src)
+        resp = await _square(client, lock, src)
+        pool.succeeded(idx) if resp.status_code == 200 else pool.failed(idx)
+        return resp
     finally:
         try:
             os.unlink(src)
