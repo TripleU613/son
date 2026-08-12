@@ -34,7 +34,13 @@ fluxbox >/dev/null 2>&1 &
 # can route to.
 x11vnc -display :99 -forever -shared -localhost -nopw -quiet >/dev/null 2>&1 &
 
-websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1 &
+# Bound to loopback explicitly. It used to listen on 0.0.0.0:6080, which was
+# unreachable anyway because the container published no port -- but the app now
+# lives in this same container, so "reachable from the app" and "reachable from the
+# host network" are no longer the same thing, and only the first is wanted. The
+# route to this browser is /admin/browser, which checks for an admin session on
+# every request including the WebSocket upgrade.
+websockify --web /usr/share/novnc 127.0.0.1:6080 localhost:5900 >/dev/null 2>&1 &
 
 # The browser Playwright shipped, started as a normal browser. Asking Playwright
 # for the path rather than globbing /ms-playwright, so an image update that moves

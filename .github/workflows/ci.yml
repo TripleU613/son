@@ -39,6 +39,15 @@ jobs:
       - name: test
         run: cargo test --no-default-features --features ssr
 
+      # The repo is public. There is no .env on a runner, so this pass checks
+      # every object in history and every tracked file against the credential
+      # shapes rather than against known values -- which is the case that matters
+      # here: a contributor (or a future me) committing a real GOCSPX-/g.a000
+      # secret. The value-comparison half runs on a machine that has the .env,
+      # from the pre-push hook.
+      - name: no secret in history or tracked files
+        run: scripts/audit-secrets.sh
+
   # Builds the production image. The Dockerfile's own builder stage runs the
   # real `cargo leptos build --release` -- there used to be a second, separate
   # compile here that produced a raw binary just to throw it away as a 7-day
@@ -57,11 +66,10 @@ jobs:
       # A digest reference (@sha256:...), not a tag: tags can be moved, even
       # by accident; a digest cannot, so deploy is guaranteed to run exactly
       # what this job built, not whatever ":<sha>" happens to point to later.
+      # One image now, so there is no second or third digest that could be
+      # mismatched with it. Three of the four outages in this project's history
+      # were exactly that: a new app image talking to a stale sidecar or keeper.
       image: ${{ steps.ref.outputs.image }}
-      # The sidecar is built and pinned by digest the same way, so a deploy can
-      # never mix a new app with a stale screening service.
-      gemini_image: ${{ steps.ref.outputs.gemini_image }}
-      keeper_image: ${{ steps.ref.outputs.keeper_image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,45 +103,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Its own image, not a second stage of the app's: the sidecar is Python,
-      # changes on a completely different cadence, and its layers have no reason
-      # to invalidate when Rust source moves. A separate cache scope keeps the
-      # two from evicting each other.
-      - name: build gemini sidecar image
-        id: build_gemini
-        uses: docker/build-push-action@v6
-        with:
-          context: ./sidecar
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.name }}-gemini:${{ github.sha }}
-            ghcr.io/${{ steps.repo.outputs.name }}-gemini:latest
-          cache-from: type=gha,scope=gemini
-          cache-to: type=gha,mode=max,scope=gemini
-
-      # Its own image again: a browser base is ~1.5GB and shares nothing with
-      # either of the others, so it gets its own cache scope too.
-      - name: build session keeper image
-        id: build_keeper
-        uses: docker/build-push-action@v6
-        with:
-          context: ./keeper
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.name }}-keeper:${{ github.sha }}
-            ghcr.io/${{ steps.repo.outputs.name }}-keeper:latest
-          cache-from: type=gha,scope=keeper
-          cache-to: type=gha,mode=max,scope=keeper
-
       - name: resolve image references
         id: ref
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          {
-            echo "image=ghcr.io/${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}"
-            echo "gemini_image=ghcr.io/${{ steps.repo.outputs.name }}-gemini@${{ steps.build_gemini.outputs.digest }}"
-            echo "keeper_image=ghcr.io/${{ steps.repo.outputs.name }}-keeper@${{ steps.build_keeper.outputs.digest }}"
-          } >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
   # Deploys the image build() just produced to bulky-server. Only runs for
   # pushes to main (never for pull_request, including from forks) -- that
@@ -178,8 +152,6 @@ jobs:
         # here once, not once per command.
         env:
           SON_IMAGE: ${{ needs.build.outputs.image }}
-          GEMINI_IMAGE: ${{ needs.build.outputs.gemini_image }}
-          KEEPER_IMAGE: ${{ needs.build.outputs.keeper_image }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -207,14 +179,25 @@ jobs:
 
           scp docker-compose.yml root@bulky-server:/opt/son/docker-compose.yml
 
-          VARS="SON_IMAGE GEMINI_IMAGE KEEPER_IMAGE CF_ACCOUNT_ID CF_D1_DATABASE_ID CF_D1_API_TOKEN \
+          VARS="SON_IMAGE CF_ACCOUNT_ID CF_D1_DATABASE_ID CF_D1_API_TOKEN \
                 R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE \
                 CF_TUNNEL_TOKEN SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
                 ADMIN_EMAILS CF_ANALYTICS_TOKEN GEMINI_COOKIES SIDECAR_KEY"
-          EXPORTS=""
-          for v in $VARS; do
-            EXPORTS="$EXPORTS $v='${!v}'"
-          done
+          # Built as a script on stdin, not as arguments to ssh.
+          #
+          # These used to be prepended to the remote command line, which puts every
+          # secret value in bulky-server's process list for as long as the pull and
+          # the `up` take -- readable by anything on the host that can run `ps`. The
+          # GHCR token below was already piped for exactly this reason; the other
+          # fifteen were not. Over stdin they are set inside the remote shell and
+          # `ps` shows `bash -s` and nothing else. printf %q so a value containing
+          # a quote or a space cannot end the assignment early.
+          remote_script() {
+            for v in $VARS; do
+              printf 'export %s=%q\n' "$v" "${!v}"
+            done
+            cat deploy/remote-deploy.sh
+          }
 
           # The image is in a private GHCR package, and the `docker login` the
           # build job did was on the *runner* -- bulky-server pulls it itself
@@ -228,9 +211,15 @@ jobs:
           # `if`, not a bare command, so a failed deploy still reaches the
           # logout below instead of leaving a registry credential sitting in
           # root's ~/.docker/config.json on the server.
-          if ssh root@bulky-server \
-               "$EXPORTS docker compose -f /opt/son/docker-compose.yml pull && \
-                $EXPORTS docker compose -f /opt/son/docker-compose.yml up -d --remove-orphans"; then
+          # --remove-orphans is load-bearing on this deploy specifically: the
+          # compose file went from four services to one, and without it the old
+          # son-app/gemini/keeper/cloudflared containers would keep running
+          # alongside the merged one -- two cloudflared processes sharing one tunnel
+          # token, which is the "two origins on one tunnel" failure that once had
+          # Cloudflare load-balancing between an old and a new stack.
+          # `if a | b` takes b's status, and ssh's status is the remote bash's --
+          # so a failed pull or a failed `up` still fails this step.
+          if remote_script | ssh root@bulky-server 'bash -s'; then
             status=0
           else
             status=$?

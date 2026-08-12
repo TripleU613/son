@@ -1,68 +1,84 @@
-# Deployed on bulky-server. No bind mounts, no named volumes: "no storage on
-# the server" is enforced structurally here, not just by convention -- there
-# is nowhere in this file a volume could even be declared for the app to write
-# application data into. Uploads go to R2, all state lives in D1.
+# Deployed on bulky-server. One image, one container, nothing else.
 #
-# The app container publishes no host port at all. cloudflared is the only way
-# in, reaching `son-app` by its Compose service name over the private network
-# this file defines -- nothing on bulky-server needs an inbound firewall rule
-# for web traffic, matching how it is already reached only over Tailscale SSH.
+# It used to be four containers -- the app, the Gemini sidecar, the session keeper
+# and cloudflared -- on a private Compose network. They are now four supervised
+# processes inside one image (see Dockerfile and deploy/supervisord.conf), which
+# means one thing to build, one thing to pull, one thing to roll back, and one
+# version number that describes what is actually running. The old split also had a
+# failure mode this cannot have: three of the four outages in this project's history
+# were a version skew or a name-resolution failure *between* those containers.
 #
-# Every value below except the image references comes from the calling shell's
-# environment, populated by the CI deploy step from GitHub Actions secrets.
-# Nothing is written to a .env file on the server or baked into any image --
-# see .github/workflows/ci.yml.
+# No bind mounts, no named volumes: "no storage on the server" is enforced
+# structurally here, not by convention -- there is nowhere in this file a volume
+# could even be declared for the app to write application data into. Uploads go to
+# R2, all state lives in D1, and the browser profile is archived to R2 as well.
 #
-# Four containers: the app, the Gemini sidecar it calls for screening, the session
-# keeper that keeps that sidecar's cookies fresh, and cloudflared. Only cloudflared
-# reaches the outside world inbound. Neither the sidecar nor the keeper publishes a
-# port -- they hold Google session state, and nothing outside this network has any
-# business reaching either.
-
-# Explicit resolvers on every service, rather than inheriting the host's.
+# No published port at all. cloudflared runs inside the container and reaches the
+# app on 127.0.0.1:3100, so nothing on bulky-server needs an inbound firewall rule
+# for web traffic -- matching how the host itself is reachable only over Tailscale.
 #
-# An upload failed with `R2 put ... dispatch failure` while, in the same second, the
-# sidecar could not resolve gemini.google.com -- a transient DNS failure inside the
-# container network taking out two unrelated things at once. Docker's embedded
-# resolver forwards to whatever the host has, so a wobble there becomes an
-# application error. Pointing at Cloudflare's resolvers (with Google's as the
-# second) takes the host's resolver out of the path; everything this app talks to is
-# behind Cloudflare anyway.
+# Every value below except the image reference comes from the calling shell's
+# environment, populated by the CI deploy step from GitHub Actions secrets. Nothing
+# is written to a .env file on the server or baked into the image -- verified, not
+# assumed: scripts/audit-secrets.sh scans the built image's layers and metadata for
+# every value in .env and fails if one appears.
 
 services:
-  son-app:
+  son:
+    # Explicit resolvers rather than inheriting the host's. An upload failed with
+    # `R2 put ... dispatch failure` while, in the same second, the sidecar could not
+    # resolve gemini.google.com -- a transient DNS failure taking out two unrelated
+    # things at once. Docker's embedded resolver forwards to whatever the host has,
+    # so a wobble there becomes an application error. Everything this talks to is
+    # behind Cloudflare anyway.
     dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]
     image: ${SON_IMAGE}
     restart: unless-stopped
+
+    # Still read-only, which is the part of the four-container setup most at risk
+    # from merging: the app container had `read_only: true` and the keeper could not,
+    # because Chromium writes throughout its profile. It holds because every writer
+    # was already pointed at /tmp -- the profile, gemini_webapi's rotated-cookie
+    # cache, supervisor's own socket and pid file, and fluxbox's state. Verified by
+    # running the merged image with it on rather than by reasoning about it.
     read_only: true
-    # Hard resource ceilings, and they are not optional. The first deploy of
-    # this file had no limits at all and went to a shared 2-core/3.7GB host
-    # that was already swap-saturated; loading the ~600MB CLIP model starved
-    # it until both SSH and ICMP stopped answering for ~10 minutes. An
-    # unbounded container on a shared host is the real defect, so the worst
-    # case here is this container being killed rather than the box going dark.
+
+    # One ceiling instead of four. Measured on the four-container deploy immediately
+    # before merging, idle: keeper 603MB, sidecar 44MB, app 4MB, cloudflared 26MB
+    # (~680MB). The peak that matters is an upload: image decode in the app (bounded
+    # by storage::MAX_PIXELS), up to five 12MB bodies spooled to /tmp by the sidecar,
+    # and whatever a Google page load costs the browser -- call it ~1.6GB with the
+    # tmpfs included, since tmpfs usage counts against this limit.
     #
-    # 1g/1cpu now that nothing loads a model. The 4g/2cpu this used to reserve
-    # was almost entirely CLIP's weights and inference, and that reservation is
-    # why this moved off bulky-server in the first place -- 4g on a 3.8GB box
-    # with tor already resident is how it went dark for ~10 minutes. What remains
-    # is image decode and resize, bounded by storage::MAX_PIXELS.
-    #
-    # Measured on bulky-server before pointing this back at it: 3.8GB total,
-    # 2.8GB available, tor at 780MB, 2 cores, no other containers running. 1g of
-    # a 2.8GB budget leaves the host room to stay reachable even if this
-    # container misbehaves -- which is the whole point of the limit.
-    #
-    # Raise it deliberately if screening ever comes back in-process rather than
-    # as an out-of-process API call.
-    mem_limit: 1g
-    memswap_limit: 1g
-    cpus: 1.0
-    # /tmp only, for whatever transient scratch space the process or its
-    # libraries expect (e.g. temp files during image decode) -- not a place
-    # application data lives, and it does not survive a container restart.
+    # 2g of the host's measured 1.84GB available plus 1.8GB of reclaimable cache.
+    # Not the 3g the four separate limits summed to: that was four independent
+    # worst cases that never happen at once, and 3g on a 3.8GB box with tor already
+    # resident is how this host went dark for ~10 minutes once before. The worst case
+    # here is this container being killed, never the box going unreachable.
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+
+    # Chrome's default 64MB /dev/shm is what makes it crash on real pages, and this
+    # is now the whole container's /dev/shm rather than the keeper's alone.
+    shm_size: 256m
+
+    # The only writable path, and it does not survive a restart. exec because
+    # Chromium maps files out of its own profile directory; size caps what the
+    # browser profile plus in-flight uploads can take out of the limit above.
     tmpfs:
-      - /tmp
+      - /tmp:exec,size=700m
+
+    # The tunnel's ingress is configured in the Cloudflare dashboard (a
+    # token-managed tunnel ignores local config), and it points at the old Compose
+    # service names. Mapping them to loopback means the merge needed no dashboard
+    # change and no window where the origin was unreachable. Safe to drop once that
+    # config says http://127.0.0.1:3100.
+    extra_hosts:
+      - "son-app:127.0.0.1"
+      - "gemini:127.0.0.1"
+      - "keeper:127.0.0.1"
+
     environment:
       RUST_LOG: info
       SITE_ORIGIN: https://soncollection.com
@@ -74,121 +90,35 @@ services:
       R2_BUCKET: ${R2_BUCKET}
       R2_PUBLIC_BASE: ${R2_PUBLIC_BASE}
       SESSION_SECRET: ${SESSION_SECRET}
-      # Unset until the Google Cloud console OAuth client exists. The app
-      # degrades to a "sign in" link that redirects with a graceful error
-      # rather than failing to start -- so this file doesn't wait on that.
+      # Unset until the Google Cloud console OAuth client exists. The app degrades
+      # to a sign-in link that redirects with a graceful error rather than failing
+      # to start, so this file doesn't wait on that.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      # Comma-separated. Re-checked at every Google login, so this is the source
-      # of truth for who is an admin -- see db::upsert_user.
+      # Comma-separated. Re-checked at every Google login, so this is the source of
+      # truth for who is an admin -- see db::upsert_user.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # Absent -> no analytics script is emitted at all. Cloudflare's edge-side
       # request/bandwidth/threat numbers need nothing here.
       CF_ANALYTICS_TOKEN: ${CF_ANALYTICS_TOKEN:-}
-      # The sidecar, by service name on the private network. Absent -> uploads
-      # publish unscreened, so this is left explicit rather than defaulted.
-      GEMINI_URL: ${GEMINI_URL:-http://gemini:8099}
-      # The keeper's noVNC, proxied to admins at /admin/browser so signing in
-      # needs nothing but the deployed site.
-      KEEPER_URL: ${KEEPER_URL:-http://keeper:6080}
-      # Lets /admin swap the sidecar's cookies without a redeploy.
-      SIDECAR_KEY: ${SIDECAR_KEY:-}
-    # Started but not waited on: `service_started` rather than
-    # `service_healthy`, because the sidecar's healthcheck needs ~90s to
-    # initialise its accounts and the gallery should be serving long before
-    # then. An upload arriving in that window publishes unscreened, which is the
-    # same behaviour as the sidecar being down -- deliberate, and logged.
-    depends_on:
-      gemini:
-        condition: service_started
-    networks: [son-net]
-
-  gemini:
-    dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]
-    image: ${GEMINI_IMAGE}
-    restart: unless-stopped
-    read_only: true
-    # 768m, not 512m: that was sized when this handled one upload at a time. With
-    # GEMINI_CONCURRENCY=5 there can be five 12MB bodies spooled to the /tmp tmpfs
-    # at once -- and tmpfs usage counts against the container's memory limit -- plus
-    # five sessions' heap. ~150MB of that is the files alone. Raised deliberately
-    # rather than discovered as an OOM kill, which is how the keeper's limit was
-    # found to be wrong.
-    mem_limit: 768m
-    memswap_limit: 768m
-    cpus: 0.5
-    # Writable /tmp is load-bearing here, not incidental: the uploaded image, the
-    # generated one, and gemini_webapi's cache of the rotated __Secure-1PSIDTS
-    # cookie all live there. tmpfs keeps "no storage on the server" true -- a
-    # restart re-derives the rotated cookie from the seed value below.
-    tmpfs:
-      - /tmp
-    environment:
-      # psid:psidts pairs, comma-separated for several accounts. The service
-      # round-robins over whichever ones initialise.
-      # The seed a fresh container starts from. The keeper below, or the paste box
-      # in /admin, replaces these at runtime without a deploy.
+      # psid:psidts pairs, comma-separated for several accounts. The seed a fresh
+      # container starts from; the keeper process, or the paste box in /admin,
+      # replaces these at runtime without a deploy.
       GEMINI_COOKIES: ${GEMINI_COOKIES}
       GEMINI_TIMEOUT: "120"
-      # How many Gemini calls may be in flight at once. Five sessions from the same
-      # cookie pair, which is only safe because the keeper owns cookie refreshing
-      # now -- two self-refreshing clients on one account invalidate each other's
-      # rotating cookie, which is how screening broke earlier.
+      # How many Gemini calls may be in flight at once. Five sessions from one
+      # cookie pair, which is only safe because the keeper owns cookie refreshing --
+      # two self-refreshing clients on one account invalidate each other's rotating
+      # cookie, which is how screening broke earlier.
       GEMINI_CONCURRENCY: ${GEMINI_CONCURRENCY:-5}
+      # Lets /admin swap the sidecar's cookies without a redeploy, and authenticates
+      # the keeper's pushes to it.
       SIDECAR_KEY: ${SIDECAR_KEY:-}
-    # No `ports:`. Nothing outside this network has any business reaching it.
-    networks: [son-net]
-
-  keeper:
-    dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]
-    image: ${KEEPER_IMAGE}
-    restart: unless-stopped
-    # Not read_only: Chromium writes throughout its profile, and the profile is
-    # the point. It is confined to the /tmp tmpfs below.
-    # A browser is heavier than everything else here combined. 1200m rather than
-    # 900m because this one runs with a display rather than headless (so an admin
-    # can sign in through it) and measured 656MB headless -- 900m left too little
-    # margin for a page load to spike into. The shm size matters as much as the
-    # total: Chrome's default 64MB /dev/shm is what makes it crash on real pages.
-    mem_limit: 1200m
-    memswap_limit: 1200m
-    cpus: 0.5
-    shm_size: 256m
-    tmpfs:
-      - /tmp:exec,size=700m
-    # No published port at all. 6080 is reached only from the app container, which
-    # proxies it to signed-in admins at /admin/browser -- so the browser is behind
-    # the site's own auth rather than behind "can you reach this host". The
-    # tailnet-bound port this used to publish was one more way in for no gain.
-    environment:
-      SIDECAR_URL: http://gemini:8099
-      SIDECAR_KEY: ${SIDECAR_KEY:-}
-      # R2 is where the browser profile lives, so a restart resumes the same
-      # session rather than needing a fresh login -- and "no storage on the
-      # server" stays true.
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
-      R2_BUCKET: ${R2_BUCKET}
-    depends_on:
-      gemini:
-        condition: service_started
-    networks: [son-net]
-
-  cloudflared:
-    dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]
-    # Pinned by digest for the same reason as the app's own base images (see
-    # Dockerfile): this container has direct control over what reaches
-    # soncollection.com, so it does not get a movable tag either. Re-pin
-    # deliberately: docker pull cloudflare/cloudflared:latest && docker
-    # inspect --format '{{index .RepoDigests 0}}' cloudflare/cloudflared:latest
-    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared@sha256:b392761b711c0e5649d9b64e1fc9a10ba0563fa3e712ed7c26bde5cc1fbe9059}
-    restart: unless-stopped
-    read_only: true
-    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
-    depends_on: [son-app]
-    networks: [son-net]
-
-networks:
-  son-net:
-    driver: bridge
+      # TUNNEL_TOKEN, which is the name cloudflared itself reads, fed from the
+      # CF_TUNNEL_TOKEN secret. Passing it as an env var rather than as --token is
+      # what keeps it out of the container's process list; see
+      # deploy/supervisord.conf.
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
+      # GEMINI_URL / KEEPER_URL / SIDECAR_URL are set in the image to loopback and
+      # deliberately not overridable from here: they no longer describe a network
+      # topology this file controls.

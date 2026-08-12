@@ -27,10 +27,17 @@ There is no container runtime on this machine and no sudo to install one, so a
 burned (a base digest that did not resolve, then `awscli` having no installation
 candidate on the Playwright base).
 
-`scripts/build-check.sh` pipes each build context over SSH to **bulky-server**,
-which does have Docker, and builds there. ~30s for the sidecar, ~3min for the
-keeper. Run it whenever a Dockerfile or a requirements file changes. It is not in
-the pre-push hook on purpose: pulling a 1.9GB base is the wrong tax on every push.
+`scripts/build-check.sh` pipes the build context over SSH to **bulky-server**,
+which does have Docker, and builds there. `--run` starts the result and checks that
+all four supervised processes come up; `--audit` scans its layers for secrets. Run
+it whenever the Dockerfile, a requirements file, `deploy/supervisord.conf` or the
+keeper's entrypoint changes. It is not in the pre-push hook on purpose: pulling a
+1.9GB browser base is the wrong tax on every push.
+
+Two build failures found this way in one sitting, both invisible without a real
+build: the Playwright base's Python is Debian-managed, so pip cannot replace its
+`typing_extensions` for fastapi (hence the sidecar's venv), and `pip check` fails on
+the base image's own missing `tzdata` before it ever sees our packages.
 
 The pre-push hook (`.githooks/pre-push`, enable with
 `git config core.hooksPath .githooks`) covers everything else, including that
@@ -63,6 +70,66 @@ For a real end-to-end check, copy `target/release/soncollection`,
 `target/release/hash.txt` and `target/site` into one directory (the container's
 `/app` layout), run it with `LEPTOS_HASH_FILES=true LEPTOS_SITE_ROOT=site`, and
 confirm the assets the HTML asks for actually return 200.
+
+## One image, four processes, nothing else deployed
+
+The app, the Gemini sidecar, the session keeper and `cloudflared` are one image and
+one container, supervised by `deploy/supervisord.conf`. It was four images and four
+containers on a Compose network; three of the four outages in this project's
+history were a version skew or a name-resolution failure *between* them, and none
+of those can happen now.
+
+- Internal URLs are loopback (`GEMINI_URL`, `KEEPER_URL`, `SIDECAR_URL` are set in
+  the Dockerfile and deliberately not overridable from compose).
+- The sidecar has its own venv; the keeper installs into the base environment
+  because its `playwright` pin must match the browsers the base image bundles.
+- `read_only: true` survived the merge. Every writer was already pointed at /tmp,
+  including supervisor's socket, pid file and logs. Keep it that way — a new
+  process that writes anywhere else breaks the container, not just itself.
+- `--remove-orphans` on the deploy is load-bearing: without it the old four
+  containers keep running beside the new one, which means two `cloudflared`
+  sharing one tunnel token — the "two origins on one tunnel" failure that had
+  Cloudflare load-balancing between an old and a new stack.
+- The tunnel's ingress is configured in the Cloudflare dashboard and still names
+  the old Compose services, so compose maps `son-app`/`gemini`/`keeper` to
+  127.0.0.1 via `extra_hosts`. Drop those once the dashboard says loopback.
+- `supervisorctl -c /etc/supervisor/supervisord.conf restart sidecar` restarts one
+  process without restarting the container.
+- The deploy waits for the container to report healthy and **puts the previous image
+  back if it does not** (`deploy/remote-deploy.sh`). `docker compose up` succeeds
+  when a container *starts*, which is a much weaker claim than "the site answers".
+- The container's healthcheck is a TCP connect to 3100 and nothing else. It must
+  never depend on Gemini: cookies expire and the keeper repairs them a minute later,
+  so a screening-aware healthcheck would roll back a working deploy. Screening
+  status belongs in /admin, which already says "Down" and why.
+
+## Secrets: the repo is public, so this is checked rather than trusted
+
+`scripts/audit-secrets.sh` scans every object in git history (all of it — a secret
+removed in a later commit is still published by the earlier one), every tracked
+file, the compiled binary, the wasm every visitor downloads, and with `--image`
+every layer and the config of the built image. It compares against every value in
+`.env` over 12 characters plus a set of credential shapes, and prints key names
+only, never values — so a failing run's output is itself safe to paste.
+
+It runs in CI (shapes only there; no `.env` on a runner) and in the pre-push hook,
+where the value comparison actually happens. Verified by planting a real `.env`
+value and a real-shaped `GOCSPX-` secret and watching it fail.
+
+What makes the answer "no" structurally, and what to not break:
+
+- **No `env!()` anywhere.** All 22 env reads are `std::env::var` at runtime. A
+  single `env!()` would bake a secret into the binary and the audit would catch it,
+  but only after it was compiled.
+- **No `--build-arg` for anything secret**, ever: build args land in the image's
+  layer history, which anyone who can pull the image can read.
+- **No `COPY . .`** in the Dockerfile — explicit paths only, and `.dockerignore`
+  excludes `.env` so it cannot reach the daemon even by accident.
+- Secrets reach production only as runtime environment, over SSH **stdin** rather
+  than an SSH command line: on the command line they sit in bulky-server's process
+  list for the length of the deploy.
+- `cloudflared` gets its token via `TUNNEL_TOKEN` in the environment, not `--token`,
+  which would put it in that container's argv for its whole lifetime.
 
 ## Traps that have already cost real time
 
@@ -273,3 +340,10 @@ the Rust client. Things that will bite you there:
   stated choice, not an oversight — but it is the risk.
 - `/api/v1/sons/:id` still exposes `reports` and `is_public` on a public
   endpoint.
+- **No LICENSE file**, while README.md refers to "the repository license" twice and
+  restricts commercial use. With no license a public repo is all-rights-reserved by
+  default, which enforces that restriction but leaves the invitation to contribute
+  code standing on nothing. Needs a decision, not a default.
+- The deploy still trusts one host: one box, one container, no second origin. A
+  failed deploy now rolls itself back (`deploy/remote-deploy.sh`), but bulky-server
+  going away is still the whole site going away.

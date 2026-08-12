@@ -45,6 +45,16 @@ for f in sidecar/*.py keeper/*.py; do
     || fail "$f does not parse"
 done
 
+# The repo is public, so a credential reaching a tracked file or a commit is not
+# a mistake that can be taken back -- it is published the moment this push lands.
+# Checked here rather than only in CI for exactly that reason: CI finds it after
+# it is already on GitHub.
+echo "pre-push: no secret in history, files or artifacts"
+scripts/audit-secrets.sh >/tmp/son-audit.$$ 2>&1 \
+  || { cat /tmp/son-audit.$$; rm -f /tmp/son-audit.$$; \
+       fail "audit-secrets found a credential (see above)"; }
+rm -f /tmp/son-audit.$$
+
 # Every pinned image digest must actually resolve. A digest fetched with the
 # wrong Accept headers is real but wrong, and fails the build with a bare
 # "not found" -- which is exactly how one CI run was wasted.

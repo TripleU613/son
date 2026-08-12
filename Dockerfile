@@ -76,48 +76,175 @@ RUN touch src/main.rs src/lib.rs
 RUN cargo leptos build --release
 
 # ---- runtime ---------------------------------------------------------------
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+#
+# One image, one container, four processes. Previously four images (app, Gemini
+# sidecar, session keeper, cloudflared) and four containers on a private Compose
+# network; now a single package, because that is one thing to build, one thing to
+# pull, one thing to roll back, and one version number that describes what is
+# actually running. The four-container split had a real cost: three of the four
+# outages in this project's history were a version skew or a name-resolution
+# failure *between* containers, neither of which can happen inside one.
+#
+# Built on Playwright's image rather than adding a browser to Debian: it is the
+# only one of the four bases that is hard to reproduce (Chromium plus ~90 matched
+# shared libraries), and it already carries the Python the sidecar and keeper need.
+# The other three contributed a static binary, two Python files, and a downloaded
+# binary -- all cheap to move here, none cheap to move the other way.
+#
+# Re-pin by asking the registry and then *proving the answer resolves*, because a
+# digest fetched with the wrong Accept headers is a different manifest's digest and
+# fails the build with a bare "not found":
+#
+#   H='Accept: application/vnd.oci.image.index.v1+json, \
+#      application/vnd.docker.distribution.manifest.list.v2+json'
+#   D=$(curl -sI -H "$H" \
+#       https://mcr.microsoft.com/v2/playwright/python/manifests/v1.62.0-noble \
+#       | awk '/^docker-content-digest/{print $2}' | tr -d '\r')
+#   curl -so /dev/null -w '%{http_code}\n' -H "$H" \
+#       "https://mcr.microsoft.com/v2/playwright/python/manifests/$D"   # want 200
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 son
+# supervisor, because four processes in one container need something that restarts
+# one of them without taking the others down. Compose used to provide that per
+# container (`restart: unless-stopped`); inside one container it has to be explicit,
+# and a bash script with `wait -n` gives up the per-program backoff and log routing
+# that make a crash-looping browser survivable.
+#
+# The display stack is for the login browser: a virtual X server for Chromium to
+# draw into, a VNC server to export it, websockify+noVNC so it opens in an ordinary
+# browser tab, and a window manager -- without one, Google's sign-in popups render
+# undecorated and cannot be focused.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates supervisor python3-venv \
+        xvfb x11vnc fluxbox websockify novnc \
+    && rm -rf /var/lib/apt/lists/*
+
+# cloudflared as a pinned binary rather than its own container.
+#
+# Checksum computed from the downloaded release asset and recorded here, the same
+# discipline as tailwindcss above: this process has direct control over what
+# reaches soncollection.com, so it does not get to be whatever a URL serves today.
+# Bump deliberately -- download the asset, sha256sum it, change both lines.
+#
+# linux-amd64 because CI builds for the runner's native platform and deploys to an
+# amd64 host; a wrong-arch pull fails at this checksum rather than at runtime.
+ARG CLOUDFLARED_VERSION=2026.7.3
+ARG CLOUDFLARED_SHA256=9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17
+RUN curl -fsSL -o /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
+    && echo "${CLOUDFLARED_SHA256}  /usr/local/bin/cloudflared" | sha256sum -c - \
+    && chmod +x /usr/local/bin/cloudflared \
+    && cloudflared --version
 
 WORKDIR /app
-COPY --from=builder --chown=son:son /build/target/release/soncollection ./soncollection
-COPY --from=builder --chown=son:son /build/target/site ./site
-# hash.txt must sit beside the binary, not in site/: leptos_meta's
-# HashedStylesheet resolves it from current_exe()'s directory. Without it the
-# <link> falls back to the unhashed name, which 404s once hash-files is on --
-# i.e. a silently style-less site.
-COPY --from=builder --chown=son:son /build/target/release/hash.txt ./hash.txt
 
-# No storage: the image ships with no writable data directory, and nothing
-# under /app is written to at runtime. Uploads go to R2, all state lives in D1.
-USER son
+# Two Python environments in one image, and not for tidiness.
+#
+# This base image's Python is Debian-managed, and fastapi/pydantic want a newer
+# typing_extensions than the distro ships. pip cannot replace a dpkg-installed
+# package -- "Cannot uninstall typing_extensions 4.10.0: no RECORD file was found"
+# -- so a single combined install fails outright. It was never a problem before
+# because the sidecar had its own python:3.13-slim image, with no distro packages
+# to collide with; the collision is a genuine cost of merging, and a venv is the
+# supported way to pay it rather than forcing the issue with
+# --break-system-packages and hoping the browser still works afterwards.
+#
+# The sidecar goes in a clean venv: it needs nothing from the base image. (Debian
+# splits `venv` out of the stdlib, hence python3-venv in the apt list above -- the
+# error without it is `ensurepip is not available`, which reads like a pip problem
+# and is a packaging one.)
+COPY sidecar/requirements.txt ./requirements-sidecar.txt
+RUN python -m venv /app/venv \
+    && /app/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /app/venv/bin/pip install --no-cache-dir -r requirements-sidecar.txt \
+    && /app/venv/bin/pip check
+# The keeper installs into the base environment on purpose: its playwright pin must
+# stay the exact version whose browsers this image bundles, and that version is
+# already installed here. A venv for it would either shadow that with a second copy
+# or need --system-site-packages, which puts the collision above right back.
+COPY keeper/requirements.txt ./requirements-keeper.txt
+# tzdata is not a keeper dependency -- it satisfies a complaint the base image
+# already had ("oslo-serialization requires tzdata, which is not installed"), which
+# would otherwise fail the `pip check` below on a problem that predates this file.
+# Installed rather than skipping the check: a pip check that is commented out
+# because of someone else's inconsistency stops catching mine.
+RUN pip install --no-cache-dir -r requirements-keeper.txt tzdata \
+    && pip check \
+    && python -c "import playwright, boto3, httpx; print('keeper deps ok')"
+
+# The app: a static binary plus its assets, straight out of the builder stage.
+COPY --from=builder /build/target/release/soncollection ./soncollection
+COPY --from=builder /build/target/site ./site
+# hash.txt must sit beside the binary, not in site/: leptos_meta's HashedStylesheet
+# resolves it from current_exe()'s directory. Without it the <link> falls back to
+# the unhashed name, which 404s once hash-files is on -- i.e. a silently style-less
+# site.
+COPY --from=builder /build/target/release/hash.txt ./hash.txt
+
+COPY sidecar/gemini_service.py ./
+COPY keeper/session_keeper.py ./
+COPY keeper/entrypoint.sh ./keeper-entrypoint.sh
+COPY deploy/supervisord.conf /etc/supervisor/supervisord.conf
+
+# Non-root, and the same user for all four processes. `pwuser` rather than a new
+# one: it already owns the browser and its caches in this image, so reusing it
+# avoids re-chowning ~1GB of /ms-playwright to say the same thing.
+#
+# Nothing here runs as root, including supervisor -- so its socket, pid file and
+# logs are configured into /tmp (see deploy/supervisord.conf), which is also what
+# lets the container keep running with a read-only root filesystem.
+RUN chown -R pwuser:pwuser /app
+USER pwuser
+
+# HOME=/tmp for every process: fluxbox, Chromium and gemini_webapi all write under
+# it, and /tmp is the one writable path (a tmpfs, per docker-compose.yml).
+ENV HOME=/tmp \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
 # LEPTOS_HASH_FILES must be set at RUNTIME, not just as `hash-files` in
 # Cargo.toml. That metadata only tells cargo-leptos to emit hashed filenames at
-# build time; LeptosOptions reads hash_files from the environment and defaults
-# it to false, and no Cargo.toml ships in this image. Without it the build
-# produces ONLY hashed assets while the served HTML asks for the unhashed names
-# -- an HTTP 200 with no CSS and no wasm. This shipped exactly once: it looked
-# fine only because Cloudflare still had the previous build's files cached, and
-# would have gone unstyled the moment that expired.
+# build time; LeptosOptions reads hash_files from the environment and defaults it to
+# false, and no Cargo.toml ships in this image. Without it the build produces ONLY
+# hashed assets while the served HTML asks for the unhashed names -- an HTTP 200
+# with no CSS and no wasm. This shipped exactly once: it looked fine only because
+# Cloudflare still had the previous build's files cached, and would have gone
+# unstyled the moment that expired.
+#
+# The two internal URLs are loopback now rather than Compose service names. That is
+# the merge's one real simplification: `http://gemini:8099` depended on Docker's
+# embedded DNS, and a transient failure there is what took out an upload and the
+# sidecar's own outbound resolution in the same second.
 ENV LEPTOS_SITE_ADDR=0.0.0.0:3100 \
     LEPTOS_SITE_ROOT=/app/site \
-    LEPTOS_HASH_FILES=true
+    LEPTOS_HASH_FILES=true \
+    GEMINI_URL=http://127.0.0.1:8099 \
+    KEEPER_URL=http://127.0.0.1:6080 \
+    SIDECAR_URL=http://127.0.0.1:8099
 
+# Only the app's port, and only to cloudflared inside this same container --
+# docker-compose.yml publishes nothing. The sidecar (8099), noVNC (6080) and VNC
+# (5900) bind to loopback and are not listed here at all: they hold Google session
+# state, and the only route to the browser is /admin/browser, which requires an
+# admin session per request.
 EXPOSE 3100
 
-# A TCP-level liveness check via bash's /dev/tcp, not a full HTTP GET: it needs
-# no curl/wget in the image, keeping the runtime stage to exactly
-# ca-certificates plus the binary and its assets.
+# "Is the site serving?" and nothing else.
 #
-# start-period is back down to 40s: it was raised to 5m only because main.rs
-# loaded a ~600MB CLIP model before binding the port, so nothing listened for
-# minutes on a cold start. With no model to load, the server binds almost
-# immediately and a 5m grace period would just delay noticing a real failure.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+# The first version of this also required the sidecar to report a usable Gemini
+# account, on the reasoning that unscreened uploads should be visible in
+# `docker ps`. That is the wrong signal in the wrong place, and it would have been
+# actively harmful: Google's cookies expire on their own schedule, the keeper
+# repairs them a minute or two later, and in that window a perfectly healthy site
+# would report unhealthy -- which the deploy now reads to decide whether to roll
+# back. Screening status has a home already: the panel at the top of /admin, which
+# says "Down" and why, and the upload page, which tells the uploader their son is
+# held for review. Container health means the site answers.
+#
+# A TCP connect via bash's /dev/tcp rather than an HTTP GET: it needs no curl in the
+# image, and a listening socket is exactly the claim being made.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD bash -c 'echo > /dev/tcp/127.0.0.1/3100' || exit 1
 
-ENTRYPOINT ["/app/soncollection"]
+ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
