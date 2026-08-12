@@ -17,3 +17,16 @@ bulky-server.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOrNxhhWeqPbu
 100.123.135.127 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
 debiantripleu ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
 debiantripleu.taildbd629.ts.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC4uj+La7bxLw1xjG/rDXVYoQHPDVeP37jMd7agKpCk9
+
+# jtech, the current deploy target. Fetched 2026-08-12 via
+#   ssh-keyscan -t ed25519 ORIGIN_ADDRESS_REDACTED
+# and cross-checked against /etc/ssh/ssh_host_ed25519_key.pub read over an
+# existing session on the box itself, so this is a verified pin rather than
+# trust-on-first-use. Fingerprint: SHA256:kAJ49ubqKzG7DkvptTyt8xndbTOBWzWIjqVPYQoXpMg
+#
+# The literal IP, not a hostname: jtech's public names all resolve to Cloudflare
+# proxies rather than to the origin, and publishing an A record for the origin
+# would expose the address of the Discourse box sitting behind that proxy. The
+# address is statically configured on eth0 (no DHCP lease on the host), so
+# pinning it is stable.
+ORIGIN_ADDRESS_REDACTED ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL3pyAaFFNm2isipUIj0OAHgAhQhf7WCpi8PmFcorNC3
