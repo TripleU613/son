@@ -9,7 +9,7 @@ use crate::components::admin::Admin;
 use crate::components::detail::SonDetail;
 use crate::components::gallery::Gallery;
 use crate::components::icon::{
-    Ico, LuCircleAlert, LuCirclePlus, LuImage, LuLogOut, LuTrophy, LuUserRound,
+    Ico, LuCircleAlert, LuCirclePlus, LuGithub, LuImage, LuLogOut, LuTrophy, LuUserRound,
 };
 use crate::components::leaderboard::Leaderboard;
 use crate::components::legal::{Privacy, Terms};
@@ -244,6 +244,11 @@ fn SiteFooter() -> impl IntoView {
     }
 }
 
+/// Where the source lives. A const rather than a literal in the markup: the footer
+/// or an about page is the obvious next place to want it, and two copies of a URL
+/// are two things to update.
+pub const GITHUB_REPO: &str = "https://github.com/TripleU613/son";
+
 /// The header. On mobile: brand, a search field and the account action. On
 /// desktop it additionally carries the section links and -- on the gallery only
 /// -- the sort chips, replacing the sidebar entirely.
@@ -313,6 +318,28 @@ fn Header() -> impl IntoView {
                         <Ico icon=LuTrophy size=18/>
                     </A>
                 </nav>
+
+                // The source. An ordinary anchor, not <A>: it is a different
+                // origin, so leptos_router leaves it alone -- rel="external" is
+                // for same-origin Axum paths and would say nothing here.
+                //
+                // Visible at every width, unlike the two nav icons above: someone
+                // who wants the code is as likely to be on a phone, and this is one
+                // 36px control next to the account button rather than a third entry
+                // competing for the mobile bottom bar.
+                //
+                // noopener with a new tab, always: target="_blank" alone hands the
+                // opened page a window.opener reference back to this one.
+                <a
+                    class="icon-btn"
+                    href=GITHUB_REPO
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Source on GitHub"
+                    title="Source on GitHub"
+                >
+                    <Ico icon=LuGithub size=18/>
+                </a>
 
                 <AccountAction/>
                 </div>
