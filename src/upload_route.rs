@@ -174,9 +174,25 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
                 }
                 step!(Step::Regenerating);
                 match crate::gemini::square(bytes).await {
-                    Ok(square) => {
-                        tracing::info!("gemini accepted and squared this upload");
+                    // Checked, not trusted. The prompt says "edit, do not redraw",
+                    // but painting over a removed caption and extending the
+                    // background to reach a square are both synthesis, and the
+                    // model re-renders the whole canvas either way -- it once
+                    // returned a different person's face in place of the uploaded
+                    // one. A prompt cannot enforce this; a comparison can.
+                    Ok(square) if crate::dedupe::is_plausible_edit(&img, &square) => {
+                        tracing::info!("gemini edited and squared this upload");
                         square
+                    }
+                    Ok(_) => {
+                        // Publish the original rather than the redraw, and rather
+                        // than refusing: the upload was screened and is fine, it
+                        // just did not come back recognisable. to_square below
+                        // still gives it the right shape.
+                        tracing::warn!(
+                            "gemini returned something too unlike the upload; keeping the original"
+                        );
+                        img
                     }
                     // Judged safe, only the redraw failed. Publish the original:
                     // it has been screened, and `to_square` below still makes it
