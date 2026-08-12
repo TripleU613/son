@@ -166,25 +166,49 @@ pub fn SonDetail() -> impl IntoView {
                                     href=format!("{}?url={}", absolute("/oembed"), page_url)
                                 />
 
-                                <article class="grid grid-cols-1 gap-4 pb-4 min-[860px]:grid-cols-[minmax(0,1fr)_300px] min-[860px]:items-start min-[860px]:gap-6 min-[860px]:pb-6">
+                                // Flex row that centres the pair, not a
+                                // 1fr-plus-sidebar grid.
+                                //
+                                // The grid was the distortion. Its first track
+                                // took every pixel the 300px sidebar did not,
+                                // and the figure -- correctly capped so it never
+                                // upscales -- then centred itself inside that
+                                // track. At 1440 that left a 612px image adrift
+                                // in a 994px column with ~190px of dead
+                                // background on each side and the text panel
+                                // stranded against the far right edge, so the
+                                // two halves of the page did not look related.
+                                //
+                                // As a centred flex row the figure is only as
+                                // wide as the son, the panel is a fixed column
+                                // beside it, and the pair sits together in the
+                                // middle whatever the son's size. The figure
+                                // keeps the default `flex: 0 1 auto` so it can
+                                // still shrink between 860px and ~1100px, where
+                                // image plus panel would otherwise overflow.
+                                <article class="flex flex-col gap-4 pb-4 min-[860px]:flex-row min-[860px]:items-start min-[860px]:justify-center min-[860px]:gap-8 min-[860px]:pb-6">
                                     // Constrained figure, not a full-bleed
                                     // image: capped at 68vh so the son is
                                     // shown whole without pushing everything
                                     // else off-screen, and `contain` so a tall
                                     // son is letterboxed rather than cropped.
                                     //
-                                    // The frame also hugs the image rather than
-                                    // stretching to fill its grid column. Left
-                                    // to stretch, a 640px-wide son sat in a
-                                    // 932px panel with 150px of dead surface on
-                                    // either side. All three caps are needed:
-                                    // the column (100%), the son's own pixel
-                                    // width (never upscale), and the width the
-                                    // 68vh height cap implies for this aspect
-                                    // (which is what a portrait son is actually
-                                    // limited by). `min()` takes the tightest.
+                                    // All three caps are needed: the container
+                                    // (100%), the son's own pixel width (never
+                                    // upscale), and the width the 68vh height
+                                    // cap implies for this aspect (which is what
+                                    // a portrait son is actually limited by).
+                                    // `min()` takes the tightest.
+                                    //
+                                    // `mx-auto` centres it on mobile, and is
+                                    // cancelled at 860px: auto margins on a flex
+                                    // item swallow all the free space, which
+                                    // would override the row's own centring and
+                                    // shove the panel back out to the edge --
+                                    // reintroducing the exact gap this change
+                                    // removes.
                                     <figure
-                                        class="m-0 mx-auto flex max-h-[68vh] items-center justify-center overflow-hidden rounded-lg border border-line bg-surface p-3"
+                                        class="m-0 mx-auto flex max-h-[68vh] items-center justify-center overflow-hidden rounded-lg border border-line bg-surface p-3 min-[860px]:mx-0"
                                         style=format!(
                                             "max-width: min(100%, calc({}px + 1.5rem), calc(68vh * {:.4} + 1.5rem))",
                                             s.width,
@@ -200,7 +224,11 @@ pub fn SonDetail() -> impl IntoView {
                                         />
                                     </figure>
 
-                                    <div>
+                                    // Fixed column beside the son on desktop,
+                                    // full width beneath it on mobile.
+                                    // `flex-none` so it never shrinks: the
+                                    // figure is the thing with room to give.
+                                    <div class="min-w-0 min-[860px]:w-[320px] min-[860px]:flex-none">
                                         <h1 class="m-0 mb-3 text-[1.375rem] font-bold tracking-tight lg:text-[1.75rem]">{s.title.clone()}</h1>
 
                                         // The icon belongs to the name, so it

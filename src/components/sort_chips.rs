@@ -58,6 +58,13 @@ pub fn SortChips(#[prop(optional, into)] class: Option<String>) -> impl IntoView
     let cls = format!("flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]{{display:none}} {}", class.unwrap_or_default());
 
     // (view, label, accessible name)
+    //
+    // "Today", not "Son of the day". That one label was as wide as the other
+    // three put together, which is what pushed the strip past the edge of every
+    // phone and left a chip sliced in half at 320-360px. The full wording still
+    // reaches a screen reader through the accessible name below, where length
+    // costs nothing -- so nothing is lost by not also spelling it out in a pill.
+    // With it shortened the four fit on a 320px screen without scrolling at all.
     let options = [
         (GalleryView::Sort(Sort::Newest), "New", "Sort by newest"),
         (
@@ -66,11 +73,7 @@ pub fn SortChips(#[prop(optional, into)] class: Option<String>) -> impl IntoView
             "Sort by most cried over",
         ),
         (GalleryView::Sort(Sort::Az), "A–Z", "Sort A to Z"),
-        (
-            GalleryView::SonOfDay,
-            "Son of the day",
-            "Show son of the day",
-        ),
+        (GalleryView::SonOfDay, "Today", "Show son of the day"),
     ];
 
     view! {
