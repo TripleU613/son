@@ -56,10 +56,10 @@ SIDECAR_KEY = os.environ.get("SIDECAR_KEY", "")
 # never more than one cycle stale.
 REFRESH_SECONDS = int(os.environ.get("KEEPER_REFRESH_SECONDS", "600"))
 
-# While not signed in, cycle much faster. Two reasons: the Gemini page needs to be
-# on screen for someone to sign in through, and once they do, the new session
-# should be picked up in seconds rather than after a ten-minute wait.
-IDLE_REFRESH_SECONDS = int(os.environ.get("KEEPER_IDLE_REFRESH_SECONDS", "45"))
+# While not signed in, look far more often. This is a cookie read over CDP with no
+# navigation and no network, so it is nearly free -- and the sooner a fresh login is
+# noticed, the smaller the window in which a container restart could lose it.
+IDLE_REFRESH_SECONDS = int(os.environ.get("KEEPER_IDLE_REFRESH_SECONDS", "5"))
 
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
@@ -160,36 +160,47 @@ async def push_cookies(psid: str, psidts: str) -> bool:
     return False
 
 
-async def _cycle(ctx, page, last: tuple[str, str] | None) -> tuple[str, str] | None:
-    """One refresh: load the page, read the jar, push the cookies if they moved."""
-    # A real navigation, which is what makes Google reissue the rotating cookie --
-    # reading the jar without loading anything would never refresh it.
-    await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
-    await page.wait_for_timeout(4_000)
+async def _cycle(
+    ctx, page, last: tuple[str, str] | None
+) -> tuple[str, str] | None:
+    """Read the cookie jar; navigate first only if there is a session to refresh.
+
+    The navigation is conditional and that is the whole point. While nobody is
+    signed in yet, this used to reload gemini.google.com on every pass -- which
+    means reloading the page out from under whoever is part-way through typing a
+    password into it, wiping the form and sending them back to the start. Reading
+    cookies over CDP needs no page load at all, so while waiting it only looks.
+
+    Once signed in the navigation is what makes Google reissue the rotating cookie,
+    so it happens then, on the slow cadence.
+    """
+    if last is not None:
+        await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
+        await page.wait_for_timeout(4_000)
 
     jar = {c["name"]: c["value"] for c in await ctx.cookies()}
-    signed_in_now = all(n in jar for n in WANTED)
     missing = [n for n in WANTED if n not in jar]
     if missing:
-        # Signed out: the profile is no longer authenticated and only a human can
-        # fix that. Said plainly rather than retried silently forever.
-        log.error(
-            "profile is not signed in (missing %s). Re-do the one-time login and "
-            "re-upload the profile.",
-            ", ".join(missing),
-        )
-        return last
+        # Signed out, or not signed in yet. Reported by the caller, which knows
+        # whether this is news.
+        return None
 
     pair = (jar["__Secure-1PSID"], jar["__Secure-1PSIDTS"])
     if pair == last:
         log.debug("cookies unchanged")
         return last
 
-    log.info("cookies changed; handing them to the sidecar")
-    if await push_cookies(*pair):
-        save_profile()
-        return pair
-    return last
+    # Saved *before* the sidecar is told, and regardless of what it says.
+    #
+    # It used to be the other way round -- push first, save only if the push was
+    # accepted -- which threw away a perfectly good login whenever the sidecar was
+    # unhappy, and lost it entirely on the next restart because the profile lives in
+    # a tmpfs. A signed-in profile is the valuable artifact here and the expensive
+    # one to replace: it needs a human. The sidecar can always be told again.
+    log.info("cookies changed; saving the profile")
+    save_profile()
+    await push_cookies(*pair)
+    return pair
 
 
 async def _park(page) -> None:
@@ -255,10 +266,12 @@ async def run() -> None:
                 if last and last != before:
                     announced = False
                 if last is None and not announced:
+                    # Once, not every pass: at a five-second cadence this would be
+                    # 700 identical lines an hour, which buries everything else.
                     log.error(
                         "not signed in. Open /admin/browser on the site and sign in "
-                        "to Google in that window; this will pick it up within %d "
-                        "seconds.",
+                        "to Google in that window; it will be picked up within %d "
+                        "seconds and saved immediately.",
                         IDLE_REFRESH_SECONDS,
                     )
                     announced = True
@@ -289,6 +302,10 @@ async def run() -> None:
                 # cadence.
                 await _park(page)
                 await asyncio.sleep(REFRESH_SECONDS)
+            elif broken:
+                # Mid-recovery: back off rather than hammering a browser that is
+                # not answering.
+                await asyncio.sleep(IDLE_REFRESH_SECONDS * 4)
             else:
                 # Still waiting on a human: leave Gemini on screen for them and
                 # come back quickly so their sign-in is noticed straight away.
