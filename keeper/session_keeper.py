@@ -276,7 +276,7 @@ async def _attach(pw):
 
 
 async def run() -> None:
-    """One browser, always running, visible at /admin/browser.
+    """Attach to the browser and keep its session fresh.
 
     Not headless, and started whether or not a profile exists yet. Both are
     deliberate: this is the window an admin signs in through, and it has to be
@@ -289,8 +289,9 @@ async def run() -> None:
     is. The moment someone signs in through the VNC window, the next cycle sees
     new cookies and hands them to the sidecar.
     """
-    restore_profile()
-
+    # No restore here: entrypoint.sh does it before launching the browser, which is
+    # the only order that works. Restoring now would write into a profile directory
+    # Chromium already has open, and it would never read those files.
     async with async_playwright() as pw:
         ctx, page = await _attach(pw)
         last: tuple[str, str] | None = None

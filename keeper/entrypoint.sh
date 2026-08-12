@@ -51,7 +51,17 @@ if [ ! -x "$CHROME" ]; then
   exit 1
 fi
 
+# The profile must be in place BEFORE the browser opens it.
+#
+# This used to happen afterwards, inside session_keeper.py, and the consequence was
+# subtle and total: Chromium started on an empty profile, the restore then wrote
+# cookies into a directory the browser already had open, and the browser -- which
+# keeps its own state in memory and rewrites those files on exit -- never saw them.
+# The log said "profile restored from R2" and the very next line said "not signed
+# in", which is exactly what happened after a deploy: a session that was safely
+# stored was not actually used.
 mkdir -p /tmp/profile
+python -c "from session_keeper import restore_profile; restore_profile()" || true
 # --remote-debugging-port on loopback only. Flags mirror the footprint work in
 # session_keeper.py: no GPU exists in this container, and a renderer cap plus a
 # small JS heap keep one page from growing without bound.

@@ -580,9 +580,25 @@ async def _keepalive() -> None:
 @app.on_event("startup")
 async def _startup() -> None:
     _write_probe()
-    await pool.start()
-    # Held so it is not garbage collected mid-flight; never awaited, since it
-    # runs for the life of the process.
+
+    # Built in the background, not awaited.
+    #
+    # Uvicorn does not accept a single connection until this hook returns, and
+    # building the pool means an image probe per account with GEMINI_TIMEOUT to
+    # spare -- so a slow or hanging Google call made the whole sidecar refuse
+    # connections rather than answer. Observed in production as `Connection
+    # refused` on /health while the container reported "health: starting".
+    #
+    # Serving immediately is strictly better: /health honestly reports zero usable
+    # accounts until the pool is ready (503, which the container healthcheck reads),
+    # and an upload arriving in that window is *held* for review rather than
+    # published unscreened. Both are states the system already handles.
+    async def _warm() -> None:
+        await pool.start()
+
+    app.state.warmup = asyncio.create_task(_warm())
+    # Held so they are not garbage collected mid-flight; never awaited, since they
+    # run for the life of the process.
     app.state.keepalive = asyncio.create_task(_keepalive())
 
 
