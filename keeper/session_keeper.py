@@ -40,6 +40,8 @@ import shutil
 import tarfile
 import tempfile
 
+import json
+
 import boto3
 import httpx
 from botocore.config import Config
@@ -63,6 +65,16 @@ IDLE_REFRESH_SECONDS = int(os.environ.get("KEEPER_IDLE_REFRESH_SECONDS", "5"))
 
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
+
+# The session itself, stored separately from the profile and authoritative over it.
+#
+# The profile turned out not to contain the session at all: Chromium keeps cookies in
+# memory and writes its SQLite store lazily, so an archive taken from a running
+# browser had eight Google cookies in it and neither of the two that matter. Verified
+# by reading Default/Cookies out of the stored archive. Cookies read over CDP are
+# exact and current, so those are what get saved, and they are injected back into the
+# browser on boot rather than hoping it reads them off disk.
+COOKIES_KEY = os.environ.get("KEEPER_COOKIES_KEY", "keeper/cookies.json")
 
 # The two cookies gemini_webapi needs. The rest of the jar is irrelevant to it.
 WANTED = ("__Secure-1PSID", "__Secure-1PSIDTS")
@@ -183,6 +195,42 @@ def save_profile() -> None:
         os.unlink(dest)
 
 
+def save_jar(cookies: list[dict]) -> None:
+    """Store the whole cookie jar, not just the two the sidecar needs.
+
+    Google's session is not only PSID/PSIDTS -- SID, HSID, SSID, SAPISID and friends
+    are part of what makes a restored session actually work, and a jar missing them
+    tends to bounce straight to a sign-in page. Storing everything costs a few KB.
+    """
+    s3 = _r2()
+    if s3 is None:
+        return
+    try:
+        s3.put_object(
+            Bucket=os.environ["R2_BUCKET"],
+            Key=COOKIES_KEY,
+            Body=json.dumps(cookies).encode(),
+            ContentType="application/json",
+        )
+        log.info("session jar saved to R2 (%d cookies)", len(cookies))
+    except Exception as e:  # noqa: BLE001
+        log.error("could not save the session jar: %s", str(e)[:200])
+
+
+def load_jar() -> list[dict] | None:
+    s3 = _r2()
+    if s3 is None:
+        return None
+    try:
+        body = s3.get_object(Bucket=os.environ["R2_BUCKET"], Key=COOKIES_KEY)["Body"].read()
+        jar = json.loads(body)
+        log.info("session jar loaded from R2 (%d cookies)", len(jar))
+        return jar
+    except Exception as e:  # noqa: BLE001 - absent is the normal first-run case
+        log.info("no stored session jar (%s)", str(e)[:120])
+        return None
+
+
 async def push_cookies(psid: str, psidts: str) -> bool:
     async with httpx.AsyncClient(timeout=120) as client:
         try:
@@ -230,6 +278,10 @@ async def _cycle(
     if pair == last:
         log.debug("cookies unchanged")
         return last
+
+    # The jar first: it is what actually restores a session, where the profile
+    # demonstrably does not.
+    save_jar(await ctx.cookies())
 
     # Saved *before* the sidecar is told, and regardless of what it says.
     #
@@ -294,6 +346,23 @@ async def run() -> None:
     # Chromium already has open, and it would never read those files.
     async with async_playwright() as pw:
         ctx, page = await _attach(pw)
+
+        # A restored profile does not carry the session (see COOKIES_KEY), so the
+        # stored jar is injected straight into the live browser. Only when it is not
+        # already signed in: overwriting a good live session with a stale stored one
+        # would be a downgrade.
+        try:
+            live = {c["name"] for c in await ctx.cookies()}
+            if not all(n in live for n in WANTED):
+                jar = load_jar()
+                if jar:
+                    await ctx.add_cookies(jar)
+                    log.info("injected the stored session; reloading to confirm")
+                    await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=90_000)
+                    await page.wait_for_timeout(4_000)
+        except Exception as e:  # noqa: BLE001 - a failed injection must not stop the loop
+            log.error("could not inject the stored session: %s", e)
+
         last: tuple[str, str] | None = None
         announced = False
         # Consecutive cycles that could not even re-attach. Past the limit the
