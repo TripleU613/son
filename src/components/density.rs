@@ -245,3 +245,47 @@ pub fn LineSkeleton(#[prop(default = 3)] lines: usize) -> impl IntoView {
         </div>
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::stagger;
+
+    /// The clamp is the whole point, so it gets a test. With a modulo, item 8
+    /// would go back to 0ms while item 7 sat at 280ms, and a tile lower on the
+    /// page would animate *before* the one above it -- a cascade that visibly
+    /// runs backwards a third of the way down a 24-tile grid.
+    #[test]
+    fn stagger_clamps_instead_of_wrapping() {
+        let last = stagger(7);
+        assert_eq!(last, "[animation-delay:280ms]");
+        for i in [8, 9, 23, 100, usize::MAX] {
+            assert_eq!(stagger(i), last, "index {i} should hold at the last step");
+        }
+    }
+
+    /// Every step must be distinct up to the clamp, or the "stagger" is really
+    /// two or three items firing together and the effect is lost.
+    #[test]
+    fn every_step_before_the_clamp_is_distinct() {
+        let steps: Vec<&str> = (0..8).map(stagger).collect();
+        let mut sorted = steps.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), steps.len(), "duplicate delay in {steps:?}");
+    }
+
+    /// The scanner reads these files as raw text, so a delay class is only real
+    /// if it is spelled out in full. Anything built with `format!` would still
+    /// pass the two tests above and generate no CSS at all, so this asserts the
+    /// shape a Tailwind arbitrary value has to have.
+    #[test]
+    fn every_step_is_a_whole_arbitrary_value_class() {
+        for i in 0..8 {
+            let s = stagger(i);
+            assert!(
+                s.starts_with("[animation-delay:") && s.ends_with("ms]"),
+                "{s:?} is not a whole arbitrary-value class"
+            );
+        }
+    }
+}

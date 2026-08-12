@@ -98,10 +98,14 @@ font:14px/1.5 system-ui}header{display:flex;gap:1rem;align-items:center;
 padding:.6rem .9rem;border-bottom:1px solid #292d35}a{color:#ffcc33}
 iframe{border:0;width:100%;height:calc(100% - 44px);display:block}</style>
 <header><strong>Sign in to Google in this window.</strong>
-<span style="color:#a6a8b0">The session is saved automatically and screening starts
-working within a minute. Nothing to switch off afterwards.</span>
+<span style="color:#a6a8b0">Saved automatically; screening starts within a minute.
+Nothing to switch off afterwards.</span>
 <a href="/admin" style="margin-left:auto">admin</a></header>
-<iframe src="/admin/browser/vnc.html?path=admin/browser/websockify&autoconnect=1&reconnect=1&resize=remote"
+<!-- resize=scale, not remote: the display is deliberately phone-shaped (see
+     keeper/entrypoint.sh), so it should be scaled to whatever screen is looking at
+     it rather than resized to match, which would undo the phone layout Google
+     serves. -->
+<iframe src="/admin/browser/vnc.html?path=admin/browser/websockify&autoconnect=1&reconnect=1&resize=scale&quality=6"
         allow="clipboard-read; clipboard-write"></iframe>"#,
     )
     .into_response()

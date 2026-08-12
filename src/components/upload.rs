@@ -859,3 +859,60 @@ fn Outcome(
         </div>
     }
 }
+
+/// The progress bar's honesty properties, asserted rather than believed.
+///
+/// They are all one edit away from being silently void -- reordering the
+/// pipeline in `upload_route.rs`, shaving a tau, nudging a ceiling to 1.0 -- and
+/// none of them fail loudly. They fail as a bar that goes backwards, or sticks,
+/// or sits full while the visitor waits, which is exactly the class of thing
+/// nobody notices until it is in production.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bands_tile_the_bar_without_gaps_or_overlap() {
+        let mut floor = 0.0;
+        for step in Step::ALL {
+            let (start, ceiling, tau) = band(step);
+            assert_eq!(start, floor, "{step:?} does not start where the last ended");
+            assert!(ceiling > start, "{step:?} has no room to move");
+            assert!(tau > 0.0, "{step:?} would divide by zero at the first poll");
+            floor = ceiling;
+        }
+        // The last ceiling is approached, never reached. A bar that fills and
+        // then waits is the classic lie, and `Done` is the only thing allowed
+        // to end this.
+        assert!(
+            floor < 1.0,
+            "the pipeline can reach 100% before it finishes"
+        );
+    }
+
+    #[test]
+    fn the_fill_always_moves_and_never_leaves_its_band() {
+        for step in Step::ALL {
+            let (start, ceiling, tau) = band(step);
+            let at = |t: u32| start + (ceiling - start) * f64::from(t) / (f64::from(t) + tau);
+            assert_eq!(at(0), start);
+            // Strictly increasing for as long as any real job could run --
+            // 10,000 polls is over two hours at 800ms, well past the point the
+            // server would have given up.
+            for t in 1..10_000u32 {
+                assert!(at(t) > at(t - 1), "{step:?} stalled at poll {t}");
+                assert!(at(t) < ceiling, "{step:?} overran its band at poll {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_step_reports_one_of_three_words() {
+        for step in Step::ALL {
+            assert!(
+                ["Uploading", "Working", "Saving"].contains(&phase(step)),
+                "{step:?} invented a fourth word"
+            );
+        }
+    }
+}

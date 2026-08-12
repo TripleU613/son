@@ -109,9 +109,10 @@ pub fn Gallery() -> impl IntoView {
     let (density, set_density) = signal(Density::default());
 
     // Switching sort invalidates everything accumulated under the old order.
-    // An Effect keyed on `sort`, because the chips that change it now live in
-    // the header and no longer have a handler here to hook into. Runs once on
-    // mount too, where resetting already-empty accumulators is a no-op.
+    // An Effect keyed on `sort` rather than a handler on the control: the value
+    // is app-level context that anything could write, and `SortMenu` owns only
+    // the writing of it. Runs once on mount too, where resetting already-empty
+    // accumulators is a no-op.
     Effect::new(move |prev: Option<Sort>| {
         let current = sort.get();
         if prev.is_some_and(|p| p != current) {

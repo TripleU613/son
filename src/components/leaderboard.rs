@@ -156,3 +156,62 @@ pub fn Leaderboard() -> impl IntoView {
         </Suspense>
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{rank_class, row_class};
+
+    /// Three tiers, three distinct strings. The middle tier is the one worth
+    /// asserting: it was added because ranks 2 and 3 previously rendered
+    /// identically to rank 40.
+    #[test]
+    fn the_podium_has_three_distinct_tiers() {
+        let first = rank_class(1);
+        let second = rank_class(2);
+        let rest = rank_class(4);
+        assert_eq!(rank_class(3), second, "3rd shares 2nd's tier");
+        assert_ne!(first, second);
+        assert_ne!(second, rest);
+        assert_ne!(first, rest);
+        for r in [5, 10, 999] {
+            assert_eq!(rank_class(r), rest, "rank {r} should be the quiet tier");
+        }
+    }
+
+    /// Colour is never the only signal: the top three are also the only ranks
+    /// set in a heavier weight, so the ordering survives being read in
+    /// greyscale or by someone who cannot separate the two yellows.
+    #[test]
+    fn the_podium_is_marked_by_weight_as_well_as_hue() {
+        assert!(rank_class(1).contains("font-semibold"));
+        assert!(rank_class(2).contains("font-semibold"));
+        assert!(rank_class(3).contains("font-semibold"));
+        assert!(!rank_class(4).contains("font-semibold"));
+    }
+
+    /// Only the winner's row gets the warm band; everything else is the plain
+    /// surface. A second highlighted row would make the band mean nothing.
+    #[test]
+    fn only_first_place_gets_the_warm_row() {
+        let winner = row_class(1);
+        let plain = row_class(2);
+        assert_ne!(winner, plain);
+        for r in [2, 3, 4, 50] {
+            assert_eq!(row_class(r), plain);
+        }
+    }
+
+    /// Both variants must describe the same box, or the list visibly steps in
+    /// and out at the first row. Only the two paint properties may differ.
+    #[test]
+    fn both_row_variants_keep_identical_geometry() {
+        let geometry = |s: &str| {
+            s.split_whitespace()
+                .filter(|c| !c.starts_with("border-") || *c == "border")
+                .filter(|c| !c.starts_with("bg-"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(geometry(row_class(1)), geometry(row_class(2)));
+    }
+}

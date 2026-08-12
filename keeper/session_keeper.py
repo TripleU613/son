@@ -11,6 +11,14 @@ gemini.google.com every so often refreshes its own `__Secure-1PSIDTS` the way an
 open tab does, and its cookie jar is always current. This reads that jar and POSTs
 the values to the sidecar's /cookies endpoint.
 
+**The browser is not launched from here.** `entrypoint.sh` starts an ordinary
+Chromium and this attaches to it over CDP. That is not incidental: a
+Playwright-launched browser carries --enable-automation and navigator.webdriver,
+and Google refuses to sign in to one ("Couldn't sign you in / This browser or app
+may not be secure"). Nothing here spoofs those signals -- the browser genuinely is
+not automated, and CDP is used only to read cookies and navigate, which the login
+check does not inspect.
+
 **Logging in is a human step.** Nothing here types a password or handles
 credentials -- it drives a browser, and a person signs in through it. The browser
 runs on a virtual display exported over VNC, which the app proxies to signed-in
@@ -53,30 +61,14 @@ REFRESH_SECONDS = int(os.environ.get("KEEPER_REFRESH_SECONDS", "600"))
 # should be picked up in seconds rather than after a ten-minute wait.
 IDLE_REFRESH_SECONDS = int(os.environ.get("KEEPER_IDLE_REFRESH_SECONDS", "45"))
 
-# Chromium flags chosen for footprint. Measured in production at 1.07GB of a
-# 1.17GB limit with the Gemini SPA resident -- 91%, which a sign-in page load would
-# have pushed into an OOM kill mid-flow. There is no GPU in the container, so the
-# GPU process and the software rasteriser behind it are pure overhead, and a
-# renderer cap plus a smaller JS heap keeps one page from growing without bound.
-CHROME_ARGS = [
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--start-maximized",
-    "--disable-gpu",
-    "--disable-software-rasterizer",
-    "--renderer-process-limit=2",
-    "--js-flags=--max-old-space-size=192",
-    "--disable-extensions",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-features=TranslateUI",
-]
-
 PROFILE_DIR = "/tmp/profile"
 PROFILE_KEY = os.environ.get("KEEPER_PROFILE_KEY", "keeper/profile.tar.gz")
 
 # The two cookies gemini_webapi needs. The rest of the jar is irrelevant to it.
 WANTED = ("__Secure-1PSID", "__Secure-1PSIDTS")
+
+# Where entrypoint.sh put the browser's debugging endpoint. Loopback only.
+CDP_URL = os.environ.get("KEEPER_CDP_URL", "http://127.0.0.1:9222")
 
 
 def _r2():
@@ -228,16 +220,13 @@ async def run() -> None:
     restore_profile()
 
     async with async_playwright() as pw:
-        # A persistent context, so the session survives restarts via the profile,
-        # and headless=False because there is a display and a human may be looking
-        # at it.
-        ctx = await pw.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            headless=False,
-            args=CHROME_ARGS,
-            viewport=None,
-        )
+        # Attach to the browser entrypoint.sh already started, rather than
+        # launching one. See the module docstring: a launched browser announces
+        # itself as automated and Google will not sign in to it.
+        browser = await pw.chromium.connect_over_cdp(CDP_URL)
+        ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        log.info("attached to the browser over CDP at %s", CDP_URL)
         last: tuple[str, str] | None = None
         announced = False
 
