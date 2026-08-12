@@ -95,7 +95,24 @@ fn reason(body: &[u8]) -> String {
 }
 
 /// Ask whether the image is safe and on-topic. Seconds, not a minute.
+///
+/// Retried once, because Gemini's transient failures are common enough to have
+/// hit the first production upload: "Unknown API error code: 1100. This might be
+/// a temporary Google service issue." A judge call is cheap, and the alternative
+/// to retrying is an upload that skips screening over a blip.
 pub async fn judge(bytes: Vec<u8>) -> Result<Verdict, Unavailable> {
+    match judge_once(bytes.clone()).await {
+        Ok(v) => Ok(v),
+        Err(Unavailable(first)) => {
+            tracing::warn!(%first, "gemini judge failed; retrying once");
+            judge_once(bytes).await.map_err(|Unavailable(second)| {
+                Unavailable(format!("{second} (first attempt: {first})"))
+            })
+        }
+    }
+}
+
+async fn judge_once(bytes: Vec<u8>) -> Result<Verdict, Unavailable> {
     let (status, body) = post("/judge", bytes).await?;
     if !status.is_success() {
         return Err(Unavailable(reason(&body)));

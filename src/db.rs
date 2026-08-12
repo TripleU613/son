@@ -318,6 +318,10 @@ pub async fn find_by_hash(hash: &str) -> anyhow::Result<Option<Son>> {
 pub struct NewSon<'a> {
     pub id: &'a str,
     pub slug: &'a str,
+    /// `false` holds the son out of the gallery until an admin releases it. Used
+    /// when screening could not run: the upload is kept, but nothing unscreened
+    /// becomes publicly visible.
+    pub is_public: bool,
     pub title: &'a str,
     pub orig_url: &'a str,
     pub thumb_url: &'a str,
@@ -350,7 +354,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
             "INSERT INTO sons (id, slug, title, orig_url, thumb_url, width, height, \
                                son_score, nsfw_score, created_at, is_public, reports, \
                                uploader_id, content_hash) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,0,0,?8,1,0,?9,?10)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,0,0,?8,?11,0,?9,?10)",
             vec![
                 json!(new.id),
                 json!(new.slug),
@@ -362,6 +366,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
                 json!(created_at),
                 json!(new.uploader_id),
                 json!(new.content_hash),
+                json!(i64::from(new.is_public)),
             ],
         )
         .await?;
@@ -375,7 +380,7 @@ pub async fn insert(new: NewSon<'_>) -> anyhow::Result<Son> {
         width: new.width,
         height: new.height,
         created_at,
-        is_public: true,
+        is_public: new.is_public,
         reports: 0,
         likes: 0,
         liked_by_me: false,
@@ -463,8 +468,13 @@ pub async fn delete_son(id: &str) -> anyhow::Result<()> {
 pub async fn flagged_sons() -> anyhow::Result<Vec<crate::models::FlaggedSon>> {
     use crate::models::{FlaggedSon, ReportDetail};
 
-    let sql =
-        format!("{SON_SELECT} WHERE s.reports > 0 ORDER BY s.reports DESC, s.created_at DESC");
+    // Held sons (is_public = 0) as well as reported ones: an upload held because
+    // screening could not run has no reports, and without this it would sit
+    // invisible forever with nothing in the UI to release it.
+    let sql = format!(
+        "{SON_SELECT} WHERE s.reports > 0 OR s.is_public = 0 \
+         ORDER BY s.reports DESC, s.created_at DESC"
+    );
     let sons: Vec<Son> = client()
         .query::<SonRow>(&sql, vec![])
         .await?

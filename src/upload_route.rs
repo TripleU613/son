@@ -141,14 +141,6 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
         Err(e) => tracing::error!("hash dedupe check failed: {e}"),
     }
 
-    // Screening and squaring, in Gemini. Runs after the duplicate check so a
-    // re-upload costs nothing, and before storage so a rejected image is never
-    // written anywhere.
-    //
-    // An `Unavailable` result keeps the original: Gemini being down, rate
-    // limited, or out of quota must not turn into "nobody can upload". The
-    // trade-off is explicit -- an outage means unscreened uploads get through,
-    // which is the same state the site is in with screening switched off.
     // Screening and squaring, in Gemini. After the duplicate check so a re-upload
     // costs nothing, and before storage so a refused image is never written.
     //
@@ -156,10 +148,14 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
     // most of a minute, and one label over both would be a progress list that
     // lies about what it is waiting for.
     //
-    // Either call being unavailable keeps the original: Gemini down, rate
-    // limited, or out of quota must not become "nobody can upload". The
-    // trade-off is explicit -- an outage means unscreened uploads get through,
-    // which is the same state the site is in with screening switched off.
+    // When screening cannot run at all, the upload is *held* rather than either
+    // dropped or published. Publishing it would mean a Gemini blip silently
+    // producing unscreened public content -- which happened on the first
+    // production upload, via a transient "API error code: 1100" -- and refusing
+    // it would mean an outage stopping contributions. Held keeps the upload,
+    // keeps it out of the gallery, and puts it in the admin queue.
+    let mut held_reason: Option<String> = None;
+
     let img = if crate::gemini::url().is_some() {
         let bytes = match encode_png(&img) {
             Ok(b) => b,
@@ -182,14 +178,18 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
                         tracing::info!("gemini accepted and squared this upload");
                         square
                     }
+                    // Judged safe, only the redraw failed. Publish the original:
+                    // it has been screened, and `to_square` below still makes it
+                    // the right shape.
                     Err(crate::gemini::Unavailable(why)) => {
-                        tracing::error!(%why, "gemini could not square it; keeping the original");
+                        tracing::warn!(%why, "gemini could not square it; publishing the original");
                         img
                     }
                 }
             }
             Err(crate::gemini::Unavailable(why)) => {
-                tracing::error!(%why, "gemini unavailable; publishing the original unscreened");
+                tracing::error!(%why, "gemini could not screen this upload; holding it for review");
+                held_reason = Some(why);
                 img
             }
         }
@@ -225,6 +225,7 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
     let son = crate::db::insert(crate::db::NewSon {
         id: &stored.id,
         slug: &slug,
+        is_public: held_reason.is_none(),
         title: &title,
         orig_url: &stored.orig_url,
         thumb_url: &stored.thumb_url,
@@ -250,6 +251,9 @@ async fn run(job: String, bytes: Vec<u8>, title: String, uploader: Option<crate:
         }
     };
 
+    if let Some(why) = held_reason {
+        tracing::warn!(son = %son.id, %why, "son held, awaiting admin review");
+    }
     set(&job, Progress::Done { son: Box::new(son) });
 }
 

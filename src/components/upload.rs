@@ -369,6 +369,24 @@ pub fn Upload() -> impl IntoView {
                         // returning and the first poll; rendered as nothing
                         // rather than as a state of its own.
                         UploadResult::Queued { .. } => ().into_any(),
+                        // A held son (is_public false) is saved but not in the
+                        // gallery, because screening could not run. Saying
+                        // "Uploaded" for it would be a lie by omission -- the
+                        // uploader would go looking for it and not find it.
+                        UploadResult::Ok { son } if !son.is_public => {
+                            view! {
+                                <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
+                                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-surface-raised text-accent">
+                                        <Ico icon=LuCircleAlert size=18/>
+                                    </span>
+                                    <p class="m-0 text-[0.9375rem] font-semibold text-ink">"Saved, waiting on review"</p>
+                                    <p class="m-0 text-[0.85rem] text-ink-2">
+                                        "We couldn't check this one automatically, so it won't appear until someone looks at it."
+                                    </p>
+                                </div>
+                            }
+                                .into_any()
+                        }
                         UploadResult::Ok { son } => {
                             view! {
                                 <div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-4 text-center">
