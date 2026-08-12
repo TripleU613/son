@@ -24,7 +24,12 @@ pub fn LikeButton(
     let (busy, set_busy) = signal(false);
 
     let click = move |ev: leptos::ev::MouseEvent| {
-        // Cards are wrapped in a link; without this the click navigates instead.
+        // Kept as a guard, not as a fix for a live bug: this button no longer
+        // sits inside the card's anchor (see `card.rs`), so there is currently
+        // no navigation to suppress and nothing above it listening for clicks.
+        // It stays because the cost is nothing and the failure it prevents --
+        // a like that silently navigates away instead of registering -- is the
+        // kind that only shows up once this button is dropped somewhere new.
         ev.prevent_default();
         ev.stop_propagation();
 

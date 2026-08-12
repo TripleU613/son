@@ -40,8 +40,16 @@ pub fn MoreSons(
                         (!sons.is_empty())
                             .then(|| {
                                 view! {
-                                    <section class="mt-6 border-t border-line pt-6">
-                                        <h2 class="m-0 mb-4 text-base font-semibold text-ink-2">"More sons"</h2>
+                                    <section class="mt-4 border-t border-line pt-5 lg:mt-6 lg:pt-6">
+                                        // A section label, not a heading that
+                                        // competes with the son's own <h1>: at
+                                        // text-base semibold it read as a
+                                        // second page title. Smaller, tracked
+                                        // out and dimmed, it announces the
+                                        // section without claiming the page.
+                                        <h2 class="m-0 mb-4 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-ink-3">
+                                            "More sons"
+                                        </h2>
                                         <div class="columns-2 gap-3 sm:columns-3 lg:columns-4 xl:columns-5 [&_.card]:mb-3 [&_.card]:break-inside-avoid [&_.card-frame]:aspect-[var(--son-ratio,4/5)]">
                                             <For
                                                 each=move || sons.clone()

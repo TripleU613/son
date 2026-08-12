@@ -208,6 +208,28 @@ pub async fn admin_flagged_sons() -> Result<Vec<crate::models::FlaggedSon>, Serv
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// How screening is doing, for the admin page. Admin-only: it reports the state
+/// of a credential, which is nobody else's business.
+#[server(AdminScreeningStatus, "/api")]
+pub async fn admin_screening_status() -> Result<crate::models::ScreeningStatus, ServerFnError> {
+    require_admin().await?;
+    Ok(crate::gemini::status().await)
+}
+
+/// Hand the sidecar fresh Gemini cookies, live.
+///
+/// The alternative is editing a GitHub secret and waiting out a full CI deploy to
+/// restore screening, which is ~12 minutes of uploads piling up in the held
+/// queue. This is seconds. The sidecar refuses cookies that cannot authenticate,
+/// so a bad paste cannot take working screening down.
+#[server(AdminSetGeminiCookies, "/api")]
+pub async fn admin_set_gemini_cookies(cookies: String) -> Result<u32, ServerFnError> {
+    require_admin().await?;
+    crate::gemini::set_cookies(&cookies)
+        .await
+        .map_err(ServerFnError::new)
+}
+
 #[server(AdminSetPublic, "/api")]
 pub async fn admin_set_public(id: String, public: bool) -> Result<(), ServerFnError> {
     require_admin().await?;

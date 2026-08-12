@@ -13,10 +13,11 @@
 # Nothing is written to a .env file on the server or baked into any image --
 # see .github/workflows/ci.yml.
 #
-# Three containers: the app, the Gemini sidecar it calls for screening, and
-# cloudflared. Only cloudflared reaches the outside world inbound; the sidecar
-# publishes no port and is reachable solely as `gemini` on the private network,
-# which matters more for it than for the app -- it holds Google session cookies.
+# Four containers: the app, the Gemini sidecar it calls for screening, the session
+# keeper that keeps that sidecar's cookies fresh, and cloudflared. Only cloudflared
+# reaches the outside world inbound. Neither the sidecar nor the keeper publishes a
+# port -- they hold Google session state, and nothing outside this network has any
+# business reaching either.
 
 services:
   son-app:
@@ -76,6 +77,8 @@ services:
       # The sidecar, by service name on the private network. Absent -> uploads
       # publish unscreened, so this is left explicit rather than defaulted.
       GEMINI_URL: ${GEMINI_URL:-http://gemini:8099}
+      # Lets /admin swap the sidecar's cookies without a redeploy.
+      SIDECAR_KEY: ${SIDECAR_KEY:-}
     # Started but not waited on: `service_started` rather than
     # `service_healthy`, because the sidecar's healthcheck needs ~90s to
     # initialise its accounts and the gallery should be serving long before
@@ -106,9 +109,42 @@ services:
     environment:
       # psid:psidts pairs, comma-separated for several accounts. The service
       # round-robins over whichever ones initialise.
+      # The seed a fresh container starts from. The keeper below, or the paste box
+      # in /admin, replaces these at runtime without a deploy.
       GEMINI_COOKIES: ${GEMINI_COOKIES}
       GEMINI_TIMEOUT: "120"
+      SIDECAR_KEY: ${SIDECAR_KEY:-}
     # No `ports:`. Nothing outside this network has any business reaching it.
+    networks: [son-net]
+
+  keeper:
+    image: ${KEEPER_IMAGE}
+    restart: unless-stopped
+    # Not read_only: Chromium writes throughout its profile, and the profile is
+    # the point. It is confined to the /tmp tmpfs below.
+    # A browser is heavier than everything else here combined, and this one is
+    # idle between refreshes. 900m fits Chromium plus one page; the shm size
+    # matters more than the total -- Chrome's default 64MB /dev/shm is what makes
+    # headless Chrome crash on real pages.
+    mem_limit: 900m
+    memswap_limit: 900m
+    cpus: 0.5
+    shm_size: 256m
+    tmpfs:
+      - /tmp:exec,size=700m
+    environment:
+      SIDECAR_URL: http://gemini:8099
+      SIDECAR_KEY: ${SIDECAR_KEY:-}
+      # R2 is where the browser profile lives, so a restart resumes the same
+      # session rather than needing a fresh login -- and "no storage on the
+      # server" stays true.
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET: ${R2_BUCKET}
+    depends_on:
+      gemini:
+        condition: service_started
     networks: [son-net]
 
   cloudflared:

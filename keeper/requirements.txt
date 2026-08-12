@@ -1,0 +1,5 @@
+# Pinned to what this was tested against. playwright's version must match the
+# base image's bundled browsers -- the image is v1.62.0, so this is too, or
+# Playwright refuses to launch with a version-mismatch error.
+playwright==1.62.0
+httpx==0.28.1

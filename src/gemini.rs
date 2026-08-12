@@ -131,3 +131,84 @@ pub async fn square(bytes: Vec<u8>) -> Result<DynamicImage, Unavailable> {
     image::load_from_memory(&body)
         .map_err(|e| Unavailable(format!("sidecar returned undecodable image: {e}")))
 }
+
+/// The shared secret the sidecar requires on `/cookies`. Absent means the swap
+/// endpoint refuses everything, which is the safe direction for a
+/// misconfiguration.
+fn sidecar_key() -> String {
+    std::env::var("SIDECAR_KEY").unwrap_or_default()
+}
+
+/// Ask the sidecar how it is doing, for the admin page.
+///
+/// Distinguishes "not configured" from "configured and broken", because those
+/// call for completely different actions and a single "screening is off" would
+/// hide which one is true.
+pub async fn status() -> crate::models::ScreeningStatus {
+    let mut out = crate::models::ScreeningStatus::default();
+    let Some(base) = url() else {
+        return out;
+    };
+    out.configured = true;
+
+    #[derive(serde::Deserialize)]
+    struct Health {
+        accounts: u32,
+        initialised: u32,
+    }
+
+    // Short timeout: this runs on an admin page load, and a hung sidecar should
+    // report as broken rather than hang the page.
+    match reqwest::Client::new()
+        .get(format!("{}/health", base.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        // 503 is the sidecar's way of saying "up, but no account works", so the
+        // body is still the answer -- an error branch here would throw it away.
+        Ok(resp) => match resp.json::<Health>().await {
+            Ok(h) => {
+                out.usable = h.accounts;
+                out.initialised = h.initialised;
+            }
+            Err(e) => out.error = Some(format!("unreadable health: {e}")),
+        },
+        Err(e) => out.error = Some(format!("sidecar unreachable: {e}")),
+    }
+    out
+}
+
+/// Replace the sidecar's cookies at runtime. Returns how many accounts came up.
+pub async fn set_cookies(cookies: &str) -> Result<u32, String> {
+    let base = url().ok_or_else(|| "GEMINI_URL not set".to_string())?;
+
+    #[derive(serde::Deserialize)]
+    struct Accepted {
+        accounts: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct Refused {
+        reason: String,
+    }
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/cookies", base.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(120))
+        .header("X-Sidecar-Key", sidecar_key())
+        .json(&serde_json::json!({ "cookies": cookies }))
+        .send()
+        .await
+        .map_err(|e| format!("sidecar unreachable: {e}"))?;
+
+    let status = resp.status();
+    let body = resp.bytes().await.map_err(|e| e.to_string())?;
+    if status.is_success() {
+        return serde_json::from_slice::<Accepted>(&body)
+            .map(|a| a.accounts)
+            .map_err(|e| format!("unreadable reply: {e}"));
+    }
+    Err(serde_json::from_slice::<Refused>(&body)
+        .map(|r| r.reason)
+        .unwrap_or_else(|_| format!("sidecar refused ({status})")))
+}

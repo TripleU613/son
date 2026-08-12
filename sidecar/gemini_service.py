@@ -32,11 +32,14 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import hmac
 import logging
 import os
+import struct
 import tempfile
+import zlib
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Header, UploadFile
 from fastapi.responses import JSONResponse, Response
 from gemini_webapi import GeminiClient
 from gemini_webapi.constants import Model
@@ -67,15 +70,72 @@ IMAGE_MODEL = Model.BASIC_PRO
 
 GEMINI_TIMEOUT = int(os.environ.get("GEMINI_TIMEOUT", "120"))
 
+# How often to poke Gemini to keep the session from going stale on its own.
+# __Secure-1PSIDTS rotates roughly every half hour and gemini_webapi refreshes it
+# in the background, but that refresh is what keeps the session alive -- a sidecar
+# that sits idle overnight comes back to an expired session. 15 minutes is
+# comfortably inside the rotation window.
+KEEPALIVE_SECONDS = int(os.environ.get("GEMINI_KEEPALIVE_SECONDS", "900"))
 
-def _accounts() -> list[tuple[str, str]]:
-    """Cookie pairs, from `GEMINI_COOKIES` as `psid:psidts,psid:psidts,...`.
 
-    Several accounts are supported because one account's quota is not enough for
-    a gallery's worth of uploads. Nothing here manages, validates, or reasons
-    about the accounts themselves -- it just takes the next one in the ring.
+# Where a runtime cookie update is remembered, so restarting the *process* (not
+# the container) keeps it. /tmp is the only writable path and is a tmpfs, which
+# is the right trade: cookies are credentials and should not outlive the
+# container, while GEMINI_COOKIES stays the seed a fresh container starts from.
+COOKIE_CACHE = "/tmp/cookies.txt"
+
+# Shared with the app, which is the only thing that should be able to swap
+# credentials. The sidecar publishes no port and is only reachable on the private
+# compose network, so this is the second lock rather than the first -- it exists
+# so that a future compose mistake exposing the port is not immediately a
+# credential-swap endpoint open to the world.
+SIDECAR_KEY = os.environ.get("SIDECAR_KEY", "")
+
+# A 1x1 PNG on disk, used to prove an account works.
+#
+# It has to be an *image* prompt, and that is the whole point. With dead cookies
+# gemini_webapi logs `Account status: UNAUTHENTICATED` as a warning and carries on
+# unauthenticated, where a plain text prompt still answers -- so a text probe
+# reported healthy while every real call failed with error 1100. Uploading an
+# image is the capability this service actually depends on, so it is the only
+# thing worth checking. A path rather than BytesIO because the uploader needs a
+# filename it has no way to accept for in-memory data.
+PROBE_PNG = "/tmp/probe.png"
+
+
+def _probe_png() -> bytes:
+    """A valid 2x2 PNG, built rather than pasted as a hex blob.
+
+    Constructed with struct+zlib so it is obviously correct and needs no image
+    library in this container. 2x2 rather than 1x1 because some decoders treat a
+    single pixel as degenerate, and two rows costs nothing.
     """
-    raw = os.environ.get("GEMINI_COOKIES", "").strip()
+    w = h = 2
+    raw = b"".join(b"\x00" + b"\x80\x80\x80\xff" * w for _ in range(h))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _write_probe() -> None:
+    try:
+        with open(PROBE_PNG, "wb") as f:
+            f.write(_probe_png())
+    except OSError as e:  # noqa: BLE001
+        log.error("could not write the probe image (%s); checks will be skipped", e)
+
+
+def _parse(raw: str) -> list[tuple[str, str]]:
+    """`psid:psidts,psid:psidts,...` -> pairs. Malformed entries are dropped
+    rather than raising: one bad paste should not take down the ones that work."""
     pairs = []
     for chunk in raw.split(","):
         chunk = chunk.strip()
@@ -85,6 +145,24 @@ def _accounts() -> list[tuple[str, str]]:
         if psid and psidts:
             pairs.append((psid.strip(), psidts.strip()))
     return pairs
+
+
+def _accounts() -> list[tuple[str, str]]:
+    """The cookies to use: a runtime update if one has been made, else the env.
+
+    Several accounts are supported because one account's quota is not enough for
+    a gallery's worth of uploads. Nothing here manages, validates, or reasons
+    about the accounts themselves -- it just takes the next one in the ring.
+    """
+    try:
+        with open(COOKIE_CACHE) as f:
+            cached = _parse(f.read())
+        if cached:
+            log.info("using %d cookie pair(s) from a runtime update", len(cached))
+            return cached
+    except OSError:
+        pass
+    return _parse(os.environ.get("GEMINI_COOKIES", "").strip())
 
 
 # How many consecutive failures make an account count as unusable in /health.
@@ -114,7 +192,26 @@ class Pool:
         self._ring = itertools.cycle([0])
 
     async def start(self) -> None:
-        for i, (psid, psidts) in enumerate(_accounts()):
+        await self._build(_accounts())
+
+    async def replace(self, pairs: list[tuple[str, str]]) -> int:
+        """Swap in new cookies and report how many actually work.
+
+        Builds and *proves* the new clients before replacing the live list, so a
+        paste of dead cookies leaves the working ones in place rather than taking
+        screening down in exchange for nothing.
+        """
+        before = self.clients, self.failures
+        self.clients, self.failures = [], []
+        await self._build(pairs)
+        if not self.clients:
+            self.clients, self.failures = before
+            return 0
+        self._ring = itertools.cycle(range(len(self.clients)))
+        return len(self.clients)
+
+    async def _build(self, pairs: list[tuple[str, str]]) -> None:
+        for i, (psid, psidts) in enumerate(pairs):
             client = GeminiClient(psid, psidts)
             try:
                 # auto_refresh keeps __Secure-1PSIDTS current in the background;
@@ -122,8 +219,19 @@ class Pool:
                 # call. The refreshed value is cached under /tmp (tmpfs), so a
                 # container restart re-derives it from the seed cookie.
                 await client.init(timeout=GEMINI_TIMEOUT, auto_refresh=True)
+                # init() is not a validity check: it succeeds for expired cookies
+                # and for outright garbage ("garbage:alsogarbage" was accepted,
+                # then failed every real call). Nor is a text prompt -- those still
+                # answer unauthenticated. Only an image prompt proves the account,
+                # which is exactly what /judge and /square need.
+                await client.generate_content(
+                    "Reply with the single word: ok",
+                    files=[PROBE_PNG],
+                    model=JUDGE_MODEL,
+                    temporary=True,
+                )
             except Exception as e:  # noqa: BLE001 - one bad account must not stop the rest
-                log.error("account %d failed to initialise: %s", i, e)
+                log.error("account %d is not usable: %s", i, str(e)[:160])
                 continue
             self.clients.append((client, asyncio.Lock()))
             self.failures.append(0)
@@ -141,9 +249,12 @@ class Pool:
         return i, client, lock
 
     def succeeded(self, i: int) -> None:
-        self.failures[i] = 0
+        if i < len(self.failures):
+            self.failures[i] = 0
 
     def failed(self, i: int) -> None:
+        if i >= len(self.failures):
+            return
         self.failures[i] += 1
         if self.failures[i] == UNHEALTHY_AFTER:
             log.error(
@@ -156,13 +267,53 @@ class Pool:
         return sum(1 for f in self.failures if f < UNHEALTHY_AFTER)
 
 
+def _authorised(key: str | None) -> bool:
+    """Constant-time compare, and an unset SIDECAR_KEY refuses everything rather
+    than allowing everything -- an empty shared secret is a misconfiguration, not
+    a decision to run open."""
+    return bool(SIDECAR_KEY) and bool(key) and hmac.compare_digest(key, SIDECAR_KEY)
+
+
 pool = Pool()
 app = FastAPI(title="gemini sidecar")
 
 
+async def _keepalive() -> None:
+    """Ask each account something trivial, forever, so the session stays live.
+
+    A one-word text prompt, no image: the point is to exercise the session and let
+    the library's cookie refresh keep up, not to do work. Failures are counted the
+    same way a real call's are, so an expired session shows up in /health within
+    minutes instead of at the next upload.
+    """
+    while True:
+        await asyncio.sleep(KEEPALIVE_SECONDS)
+        for i, (client, lock) in enumerate(list(pool.clients)):
+            try:
+                async with lock:
+                    # With the probe image, for the same reason _build uses it: a
+                    # text-only keepalive would keep reporting success against an
+                    # unauthenticated session.
+                    await client.generate_content(
+                        "Reply with the single word: ok",
+                        files=[PROBE_PNG],
+                        model=JUDGE_MODEL,
+                        temporary=True,
+                    )
+                pool.succeeded(i)
+                log.debug("keepalive ok for account %d", i)
+            except Exception as e:  # noqa: BLE001
+                pool.failed(i)
+                log.warning("keepalive failed for account %d: %s", i, e)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
+    _write_probe()
     await pool.start()
+    # Held so it is not garbage collected mid-flight; never awaited, since it
+    # runs for the life of the process.
+    app.state.keepalive = asyncio.create_task(_keepalive())
 
 
 @app.get("/health")
@@ -196,6 +347,50 @@ async def _with_temp(image: UploadFile):
     with open(src, "wb") as f:
         f.write(data)
     return idx, client, lock, src
+
+
+@app.post("/cookies")
+async def cookies(
+    payload: dict,
+    x_sidecar_key: str | None = Header(default=None),
+) -> Response:
+    """Swap in fresh cookies without a redeploy.
+
+    This exists because the cookies expire and there is no way around that: the
+    Gemini web client authenticates as a browser session, and a session dies. What
+    can be fixed is the cost of replacing them -- editing a GitHub secret and
+    waiting out a ~12 minute CI deploy, versus pasting two values into /admin and
+    having screening back in seconds.
+
+    Verified before being accepted: the new cookies have to actually initialise, or
+    the request is refused and whatever was working stays working.
+    """
+    if not _authorised(x_sidecar_key):
+        return JSONResponse({"reason": "unauthorised"}, status_code=403)
+
+    pairs = _parse(str(payload.get("cookies", "")))
+    if not pairs:
+        return JSONResponse(
+            {"reason": "expected psid:psidts, comma-separated for several accounts"},
+            status_code=400,
+        )
+
+    count = await pool.replace(pairs)
+    if not count:
+        return JSONResponse(
+            {"reason": "none of those cookies could authenticate; kept the previous ones"},
+            status_code=400,
+        )
+
+    # Remembered so a process restart inside the container keeps them.
+    try:
+        with open(COOKIE_CACHE, "w") as f:
+            f.write(",".join(f"{p}:{t}" for p, t in pairs))
+    except OSError as e:  # noqa: BLE001
+        log.warning("could not cache cookies (%s); they are live but not persisted", e)
+
+    log.info("cookies replaced at runtime; %d account(s) ready", count)
+    return JSONResponse({"accounts": count})
 
 
 @app.post("/judge")

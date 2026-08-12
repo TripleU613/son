@@ -132,9 +132,25 @@ pub fn App() -> impl IntoView {
                 // Legal links live in a thin footer now that desktop has no
                 // sidebar to hang them off. Padded clear of the mobile bottom
                 // nav rather than competing with it.
-                <footer class="flex justify-center gap-4 px-4 pb-[calc(58px+env(safe-area-inset-bottom)+1rem)] pt-4 text-xs text-ink-3 lg:px-6 lg:pb-8 lg:pt-6">
-                    <A href="/privacy">"Privacy"</A>
-                    <A href="/tos">"Terms"</A>
+                //
+                // The rule and the inner wrapper are what stop it reading as two
+                // words dropped in the void: on a short page (a gallery with one
+                // row) the links previously floated in the middle of empty
+                // background with nothing terminating the page. The wrapper also
+                // puts them on the same `max-w-content` column and the same
+                // lg:px-8 gutter as <main>, which the old lg:px-6 quietly missed.
+                <footer class="px-4 pb-[calc(58px+env(safe-area-inset-bottom)+1rem)] lg:px-8 lg:pb-8">
+                    <div class="mx-auto flex max-w-content justify-center gap-5 border-t border-line pt-5 text-xs text-ink-3">
+                        <A
+                            href="/privacy"
+                            attr:class="rounded-sm transition-colors hover:text-ink-2"
+                        >
+                            "Privacy"
+                        </A>
+                        <A href="/tos" attr:class="rounded-sm transition-colors hover:text-ink-2">
+                            "Terms"
+                        </A>
+                    </div>
                 </footer>
             </div>
         </Router>
@@ -216,11 +232,21 @@ fn Header() -> impl IntoView {
                 // rather than a width/opacity transition: an invisible-but-
                 // present field is still focusable, so tabbing through the
                 // header would land in a search box nobody can see.
+                //
+                // `order-first` unconditionally, which on mobile is what puts
+                // the field between the brand and the account button. In DOM
+                // order the account action comes first, so the avatar sat
+                // marooned in the middle of the bar with the search field to
+                // its right -- brand, account, search reads as three unrelated
+                // things, where brand, search, account is the arrangement every
+                // other app has trained people to expect. On desktop it is the
+                // same rule the expanded field already used: grow leftwards
+                // into space that is already empty, so the icons never move.
                 <SearchBox extra_class=Signal::derive(move || {
                     if search_open.get() {
-                        "lg:order-first lg:flex lg:w-64".to_string()
+                        "order-first lg:flex lg:w-64".to_string()
                     } else {
-                        "lg:hidden".to_string()
+                        "order-first lg:hidden".to_string()
                     }
                 })/>
                 </div>

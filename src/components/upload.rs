@@ -276,8 +276,40 @@ pub fn Upload() -> impl IntoView {
                                         <Ico icon=LuCloudUpload size=26/>
                                     </span>
                                     <strong>
+                                        // "Drop a file" is an instruction a
+                                        // phone cannot follow -- there is
+                                        // nothing to drag with -- so touch gets
+                                        // the prompt that matches what it can
+                                        // actually do.
+                                        //
+                                        // Chosen by `pointer:fine` rather than a
+                                        // width breakpoint, because the question
+                                        // is whether this device has a pointer,
+                                        // not how wide it is: a 1400px touch
+                                        // screen still cannot drag, and a 700px
+                                        // window with a mouse still can. Both
+                                        // strings are rendered and CSS hides
+                                        // one, so nothing branches on the
+                                        // viewport in Rust -- the server has no
+                                        // window, and disagreeing with the
+                                        // client there is what killed the wasm
+                                        // module once already.
                                         {move || {
-                                            if dragging.get() { "Drop it" } else { "Drop a file, or choose one" }
+                                            if dragging.get() {
+                                                view! { <span>"Drop it"</span> }.into_any()
+                                            } else {
+                                                view! {
+                                                    <span>
+                                                        <span class="[@media(pointer:fine)]:hidden">
+                                                            "Choose a file"
+                                                        </span>
+                                                        <span class="hidden [@media(pointer:fine)]:inline">
+                                                            "Drop a file, or choose one"
+                                                        </span>
+                                                    </span>
+                                                }
+                                                    .into_any()
+                                            }
                                         }}
                                     </strong>
                                     // Kept: the format/size line prevents a

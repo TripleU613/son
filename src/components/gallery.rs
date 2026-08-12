@@ -127,8 +127,15 @@ pub fn Gallery() -> impl IntoView {
         // Tabs and the view-mode toggle share one row: tabs left, modes right.
         // The son-of-the-day banner that used to sit above this is now the last
         // tab instead of a full-width card competing with the grid.
-        <div class="flex min-w-0 items-center gap-3 pb-4">
-            <SortChips class="flex-1"/>
+        // The tab strip scrolls sideways when it does not fit (it stops fitting
+        // around 360px). Bled out to the viewport edges with matching inner
+        // padding so a half-scrolled chip is cut off by the edge of the screen,
+        // which reads as "there is more this way"; clipped at the content
+        // gutter instead, the same chip just looks broken. Cancelled at the
+        // breakpoint where the density toggle joins the row and the strip stops
+        // owning the full width.
+        <div class="flex min-w-0 items-center gap-3 pb-3 min-[700px]:pb-4">
+            <SortChips class="flex-1 -mx-4 px-4 min-[700px]:mx-0 min-[700px]:px-0"/>
             <DensityToggle density=density set_density=set_density/>
         </div>
 

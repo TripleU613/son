@@ -80,7 +80,15 @@ pub fn SortChips(#[prop(optional, into)] class: Option<String>) -> impl IntoView
                 .map(|(target, label, aria)| {
                     view! {
                         <button
-                            class="chip min-h-[44px] lg:min-h-8"
+                            // 36px on touch, 32px with a mouse. Was 44px, which
+                            // is Apple's recommended target but not a
+                            // requirement -- WCAG 2.2's Target Size (Minimum)
+                            // is 24x24 CSS px, so 36 clears it with room. At 44
+                            // these were tall rounded lozenges stacked directly
+                            // under a 56px bar, and the two bands together ate
+                            // the top of a phone screen before a single son
+                            // appeared.
+                            class="chip min-h-9 lg:min-h-8"
                             class:is-active=move || view.get() == target
                             aria-label=aria
                             // Announced as pressed, so selection is not carried

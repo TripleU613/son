@@ -1,7 +1,11 @@
 use leptos::prelude::*;
 use leptos_meta::Title;
 
-use crate::api::{admin_delete_son, admin_flagged_sons, admin_set_public};
+use crate::api::{
+    admin_delete_son, admin_flagged_sons, admin_screening_status, admin_set_gemini_cookies,
+    admin_set_public,
+};
+use crate::components::icon::{Ico, LuCheck, LuCircleAlert, LuRefreshCw};
 use crate::models::FlaggedSon;
 
 /// The report queue. Gated server-side in every server fn it calls
@@ -20,7 +24,8 @@ pub fn Admin() -> impl IntoView {
 
     view! {
         <Title text="admin — son collection"/>
-        <h1 class="m-0 mb-4 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"report queue"</h1>
+        <ScreeningPanel/>
+        <h1 class="m-0 mb-4 mt-8 text-[1.375rem] font-bold tracking-tight lg:mb-6 lg:text-[1.75rem]">"report queue"</h1>
 
         <Suspense fallback=|| view! { <p class="py-14 text-center text-ink-2">"loading queue…"</p> }>
             {move || {
@@ -163,5 +168,146 @@ fn AdminRow(
                 </div>
             </div>
         </article>
+    }
+}
+
+/// Screening status, and somewhere to paste fresh cookies.
+///
+/// This panel exists because the Gemini web session expires and there is no way
+/// around that -- it authenticates as a browser session, and sessions die. What is
+/// fixable is the cost: without this, restoring screening means editing a GitHub
+/// secret and waiting out a ~12 minute CI deploy while uploads pile up in the held
+/// queue. Here it is a paste and a click.
+#[component]
+fn ScreeningPanel() -> impl IntoView {
+    let status = Resource::new(|| (), |_| admin_screening_status());
+    let cookies: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    let submit = Action::new(|value: &String| {
+        let value = value.clone();
+        async move { admin_set_gemini_cookies(value).await }
+    });
+
+    // Re-read the status after a swap, so the panel shows the result of what was
+    // just pasted rather than the state before it.
+    Effect::new(move |_| {
+        if submit.value().get().is_some() {
+            status.refetch();
+        }
+    });
+
+    view! {
+        <section class="rounded-lg border border-line bg-surface p-4">
+            <h2 class="m-0 mb-3 text-base font-semibold">"Screening"</h2>
+
+            <Suspense fallback=|| view! { <p class="text-[0.85rem] text-ink-3">"checking…"</p> }>
+                {move || {
+                    status
+                        .get()
+                        .map(|res| match res {
+                            Err(e) => {
+                                view! { <p class="text-[0.85rem] text-danger">{e.to_string()}</p> }
+                                    .into_any()
+                            }
+                            Ok(s) if !s.configured => {
+                                view! {
+                                    <p class="flex items-center gap-2 text-[0.9rem] text-ink-2">
+                                        <span class="text-ink-3"><Ico icon=LuCircleAlert size=15/></span>
+                                        "Off — GEMINI_URL is not set. Uploads publish unscreened."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Ok(s) if s.usable > 0 => {
+                                view! {
+                                    <p class="flex items-center gap-2 text-[0.9rem] text-ink">
+                                        <span class="text-ok"><Ico icon=LuCheck size=15/></span>
+                                        {format!("Working — {} account(s) answering.", s.usable)}
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Ok(s) => {
+                                // The important case: up, but nothing works. Says
+                                // what happens to uploads meanwhile, because that
+                                // is the actual consequence.
+                                let detail = s
+                                    .error
+                                    .clone()
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "{} account(s) started, none answering — the cookies have expired.",
+                                            s.initialised,
+                                        )
+                                    });
+                                view! {
+                                    <p class="flex items-center gap-2 text-[0.9rem] font-semibold text-danger">
+                                        <span><Ico icon=LuCircleAlert size=15/></span>
+                                        "Down"
+                                    </p>
+                                    <p class="m-0 mt-1 text-[0.85rem] text-ink-2">{detail}</p>
+                                    <p class="m-0 mt-1 text-[0.85rem] text-ink-3">
+                                        "Uploads are being held for review, not published."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </Suspense>
+
+            <form
+                class="mt-3 grid gap-2"
+                on:submit=move |ev| {
+                    ev.prevent_default();
+                    if let Some(t) = cookies.get() {
+                        let v = t.value();
+                        if !v.trim().is_empty() {
+                            submit.dispatch(v);
+                            t.set_value("");
+                        }
+                    }
+                }
+            >
+                <label class="text-[0.8rem] text-ink-3" for="cookiebox">
+                    "Fresh cookies as "
+                    <code class="text-ink-2">"__Secure-1PSID:__Secure-1PSIDTS"</code>
+                    ", comma-separated for several accounts"
+                </label>
+                <textarea
+                    id="cookiebox"
+                    node_ref=cookies
+                    rows="3"
+                    class="field font-mono text-[0.75rem]"
+                    placeholder="g.a000...:sidts-..."
+                />
+                <div class="flex items-center gap-3">
+                    <button class="btn" type="submit" disabled=move || submit.pending().get()>
+                        <Ico icon=LuRefreshCw size=15/>
+                        {move || if submit.pending().get() { "Applying…" } else { "Apply" }}
+                    </button>
+                    {move || {
+                        submit
+                            .value()
+                            .get()
+                            .map(|res| match res {
+                                Ok(n) => {
+                                    view! {
+                                        <span class="text-[0.85rem] text-ok">
+                                            {format!("{n} account(s) ready")}
+                                        </span>
+                                    }
+                                        .into_any()
+                                }
+                                Err(e) => {
+                                    view! {
+                                        <span class="text-[0.85rem] text-danger">{e.to_string()}</span>
+                                    }
+                                        .into_any()
+                                }
+                            })
+                    }}
+                </div>
+            </form>
+        </section>
     }
 }

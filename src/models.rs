@@ -128,6 +128,21 @@ impl Sort {
     }
 }
 
+/// Whether screening is actually working, as shown on the admin page.
+///
+/// `usable` counts accounts answering right now, which is not the same as
+/// accounts that started: a session with expired cookies initialises fine and
+/// then fails every call.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScreeningStatus {
+    /// `false` when GEMINI_URL is unset -- screening is off, not broken.
+    pub configured: bool,
+    pub usable: u32,
+    pub initialised: u32,
+    /// Present when the sidecar could not be reached or reported an error.
+    pub error: Option<String>,
+}
+
 /// A signed-in user, as far as the UI is concerned.
 ///
 /// Deliberately thin: no email, no Google subject id. Those have no reason to
