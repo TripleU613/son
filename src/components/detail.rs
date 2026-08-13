@@ -780,15 +780,17 @@ pub fn SonDetail() -> impl IntoView {
                                             // squeezed in, with no compile error
                                             // and nothing visibly wrong until
                                             // someone opens it on a phone.
+                                            // Beside download and share, not
+                                            // after the report control. Report
+                                            // takes `basis-full` the moment it
+                                            // opens, so anything placed after it
+                                            // is pushed onto its own line and
+                                            // stops being part of this group at
+                                            // all.
+                                            <AdminDelete id=s.id.clone() slug=s.slug.clone()/>
                                             <div class="has-[fieldset]:basis-full has-[p]:basis-full">
                                                 <ReportForm son_id=s.id.clone()/>
                                             </div>
-                                            // Last in the bar, past report: it
-                                            // is the only irreversible control
-                                            // here, so it sits furthest from
-                                            // the one people actually came to
-                                            // press.
-                                            <AdminDelete id=s.id.clone() slug=s.slug.clone()/>
                                         </div>
                                     </div>
                                 </article>
