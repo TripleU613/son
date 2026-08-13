@@ -169,8 +169,54 @@ pub fn orig_key(id: &str) -> String {
     format!("orig/{id}.png")
 }
 
+/// Thumbnails are JPEG, and the extension is part of the key because the
+/// original is not.
+///
+/// A son is a photograph with text on it, and PNG is lossless: measured in
+/// production, a 480px thumbnail weighed ~300KB, so one 24-tile gallery page
+/// pulled roughly **7MB** of images. The same tile as JPEG is 20-40KB. Nothing
+/// about the format was the problem -- the caching was already right
+/// (`immutable`, `max-age=31536000`, hitting the edge) -- there was simply ten
+/// times more of it than there needed to be.
+///
+/// Losing alpha is fine *here specifically*: the thumbnail is only ever drawn
+/// into a grid tile with `object-cover`, so it is cropped edge to edge and
+/// nothing behind it can show through. Transparent pixels are flattened onto the
+/// surface colour rather than turning black. The original keeps PNG, because
+/// that is the copy people download and the one carrying the provenance chunks
+/// and the watermark.
 pub fn thumb_key(id: &str) -> String {
-    format!("thumb/{id}.png")
+    format!("thumb/{id}.jpg")
+}
+
+/// Quality for thumbnails. 82 is the usual sweet spot where JPEG artefacts stop
+/// being visible on photographic content at this size; the emoji and caption
+/// text these images carry are the parts that would show ringing first, and they
+/// survive it at 480px.
+const THUMB_QUALITY: u8 = 82;
+
+/// `bg` is the tile background these are drawn on (`surface-raised`), so a
+/// transparent source flattens to the colour it would have appeared to sit on
+/// rather than to black.
+fn encode_thumb_jpeg(img: &DynamicImage) -> anyhow::Result<Vec<u8>> {
+    use image::{Rgba, RgbaImage};
+
+    const BG: Rgba<u8> = Rgba([0x12, 0x14, 0x19, 0xff]);
+
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut flat = RgbaImage::from_pixel(w, h, BG);
+    image::imageops::overlay(&mut flat, &rgba, 0, 0);
+
+    let rgb = DynamicImage::ImageRgba8(flat).to_rgb8();
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, THUMB_QUALITY).encode(
+        rgb.as_raw(),
+        w,
+        h,
+        image::ExtendedColorType::Rgb8,
+    )?;
+    Ok(buf)
 }
 
 /// Persist the original (re-encoded to PNG, which strips EXIF and any payload
@@ -204,7 +250,10 @@ pub async fn store(
         page_url: &page_url,
     };
     let orig_bytes = encode_png(&watermarked, &meta)?;
-    let thumb_bytes = encode_png(&thumb, &meta)?;
+    // The thumbnail deliberately does NOT go through `encode_png`, so it carries
+    // none of the iTXt provenance chunks -- JPEG has nowhere to put them, and it
+    // is not the copy anyone traces provenance from. See `thumb_key`.
+    let thumb_bytes = encode_thumb_jpeg(&thumb)?;
 
     let be = backend();
     let (ok, tk) = (orig_key(&id), thumb_key(&id));
@@ -213,7 +262,7 @@ pub async fn store(
 
     // If the thumbnail fails, drop the original too rather than leaving a son
     // that the gallery cannot render.
-    if let Err(e) = be.put(&tk, thumb_bytes, "image/png").await {
+    if let Err(e) = be.put(&tk, thumb_bytes, "image/jpeg").await {
         be.delete(&ok).await;
         return Err(e);
     }
@@ -281,7 +330,13 @@ mod tests {
     #[test]
     fn keys_are_derived_from_id_only() {
         assert_eq!(orig_key("abc"), "orig/abc.png");
-        assert_eq!(thumb_key("abc"), "thumb/abc.png");
+        // The two extensions differ on purpose and are not interchangeable: the
+        // original stays PNG because it carries the watermark and the iTXt
+        // provenance chunks, and the thumbnail is JPEG because it is a
+        // photograph shown at 480px and PNG made it ten times bigger than it
+        // needed to be. Changing either string orphans every object already in
+        // R2 under the old key.
+        assert_eq!(thumb_key("abc"), "thumb/abc.jpg");
     }
 
     #[test]

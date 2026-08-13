@@ -80,7 +80,12 @@ pub fn Leaderboard() -> impl IntoView {
                             view! {
                                 <EmptyState
                                     icon=LuTrophy
-                                    message="No contributors yet."
+                                    // Not "no contributors yet", which read as
+                                    // an empty collection. There are 70-odd
+                                    // sons here; every one of them was uploaded
+                                    // without an account, and this board only
+                                    // ranks people who upload signed in.
+                                    message="All contributions were anonymous…"
                                     action_href="/upload"
                                     action_label="Be the first"
                                 />
