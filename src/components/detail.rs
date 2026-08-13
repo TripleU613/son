@@ -3,8 +3,8 @@ use leptos_meta::{Link, Meta, Title};
 use leptos_router::components::A;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
-use crate::api::{get_son, son_neighbours};
-use crate::components::icon::{Ico, LuCircleAlert, LuDownload, LuUserRound};
+use crate::api::{admin_delete_son, current_user, get_son, son_neighbours};
+use crate::components::icon::{Ico, LuCircleAlert, LuDownload, LuTrash2, LuUserRound};
 use crate::components::like::LikeButton;
 use crate::components::more_sons::MoreSons;
 use crate::components::report::ReportForm;
@@ -113,6 +113,125 @@ const SWIPE_RUBBER_PX: f64 = 28.0;
 // handlers that compile under both feature sets — the handlers are inert on the
 // server, but they are still built there, so gating these would break the ssr
 // build rather than quiet it.
+
+/// Delete this son. Only rendered for an admin, and only in the browser.
+///
+/// The signed-in user is resolved in an `Effect` rather than a `Resource`, for
+/// the same reason spelled out on the neighbour lookup below: this route is
+/// `SsrMode::Async`, which holds the whole response until every resource on the
+/// page has resolved, and the only reason it is Async at all is to get the og:
+/// tags into the server HTML. A resource here would put a D1 round trip in front
+/// of time-to-first-byte on the one page whose entire job is being unfurled in a
+/// chat client -- to decide whether to draw a button that almost nobody can see.
+/// Effects are client-only by construction, so that cost lands only where the
+/// control can actually appear.
+///
+/// The access control is `admin_delete_son`'s own `require_admin`, server-side.
+/// This component hiding itself from everyone else is a courtesy, exactly as the
+/// /admin page documents about itself.
+#[component]
+fn AdminDelete(id: String, slug: String) -> impl IntoView {
+    let (is_admin, set_is_admin) = signal(false);
+    let (confirming, set_confirming) = signal(false);
+    let (failed, set_failed) = signal(false);
+    // StoredValue, not the String: this is read from inside click handlers that
+    // live in a reactive view, so a captured String would make them FnOnce.
+    let son_id = StoredValue::new(id);
+    let son_slug = StoredValue::new(slug);
+    let navigate = use_navigate();
+
+    Effect::new(move |_| {
+        leptos::task::spawn_local(async move {
+            // An error here means "could not reach D1", which is not the same as
+            // "not an admin" -- but it resolves to the same thing on screen, and
+            // the safe direction is to show nothing.
+            if let Ok(Some(user)) = current_user().await {
+                set_is_admin.set(user.is_admin);
+            }
+        });
+    });
+
+    view! {
+        <Show when=move || is_admin.get() fallback=|| ()>
+            {
+                let navigate = navigate.clone();
+                view! {
+                    <Show
+                        when=move || confirming.get()
+                        fallback=move || {
+                            view! {
+                                // `.icon-btn`'s geometry written out in full
+                                // rather than the class plus hover overrides.
+                                // The primitive already sets a hover background
+                                // and a hover text colour, so overriding those
+                                // is two rules for one property decided by
+                                // stylesheet order -- the cascade coin-flip this
+                                // project deleted its stylesheet to escape, and
+                                // the thing the admin queue needed !important
+                                // for until that was rewritten the same way.
+                                <button
+                                    type="button"
+                                    class="inline-flex h-9 w-9 items-center justify-center rounded border border-transparent bg-transparent text-ink-2 transition-colors hover:border-danger hover:bg-danger/10 hover:text-danger"
+                                    aria-label="Delete this son"
+                                    title="Delete this son"
+                                    on:click=move |_| set_confirming.set(true)
+                                >
+                                    <Ico icon=LuTrash2 size=17/>
+                                </button>
+                            }
+                        }
+                    >
+                        {
+                            let navigate = navigate.clone();
+                            view! {
+                                // Two steps, like the admin queue's own delete:
+                                // this removes the R2 objects as well as the row,
+                                // so there is nothing to undo afterwards.
+                                <button
+                                    type="button"
+                                    class="inline-flex min-h-9 items-center gap-2 rounded border border-danger bg-danger/10 px-3 text-[0.85rem] font-semibold text-danger transition-colors hover:bg-danger/20"
+                                    on:click=move |_| {
+                                        let navigate = navigate.clone();
+                                        set_failed.set(false);
+                                        leptos::task::spawn_local(async move {
+                                            match admin_delete_son(son_id.get_value()).await {
+                                                // Gone, so staying on its page
+                                                // would render a 404 for the
+                                                // thing just deleted.
+                                                Ok(()) => navigate("/", Default::default()),
+                                                Err(e) => {
+                                                    leptos::logging::error!(
+                                                        "delete failed for {}: {e}", son_slug.get_value()
+                                                    );
+                                                    set_failed.set(true);
+                                                }
+                                            }
+                                        });
+                                    }
+                                >
+                                    <Ico icon=LuTrash2 size=15/>
+                                    "really delete? (no undo)"
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn-quiet"
+                                    on:click=move |_| set_confirming.set(false)
+                                >
+                                    "cancel"
+                                </button>
+                            }
+                        }
+                    </Show>
+                }
+            }
+        </Show>
+        <Show when=move || failed.get() fallback=|| ()>
+            <p class="m-0 basis-full text-[0.8rem] text-danger" role="alert">
+                "That didn't go through. Try again."
+            </p>
+        </Show>
+    }
+}
 
 /// A single son's page.
 ///
@@ -664,6 +783,12 @@ pub fn SonDetail() -> impl IntoView {
                                             <div class="has-[fieldset]:basis-full has-[p]:basis-full">
                                                 <ReportForm son_id=s.id.clone()/>
                                             </div>
+                                            // Last in the bar, past report: it
+                                            // is the only irreversible control
+                                            // here, so it sits furthest from
+                                            // the one people actually came to
+                                            // press.
+                                            <AdminDelete id=s.id.clone() slug=s.slug.clone()/>
                                         </div>
                                     </div>
                                 </article>

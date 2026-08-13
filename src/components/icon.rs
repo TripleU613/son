@@ -17,7 +17,7 @@ use leptos_icons::Icon;
 pub use icondata_lu::{
     LuArrowLeft, LuCheck, LuCircleAlert, LuCirclePlus, LuCloudUpload, LuDownload, LuDroplet,
     LuEllipsis, LuFlag, LuGalleryThumbnails, LuGithub, LuGrid2x2, LuImage, LuLayoutGrid, LuLink,
-    LuLogOut, LuMenu, LuRefreshCw, LuSearch, LuShare2, LuTrophy, LuUserRound, LuX,
+    LuLogOut, LuMenu, LuRefreshCw, LuSearch, LuShare2, LuTrash2, LuTrophy, LuUserRound, LuX,
 };
 
 /// Default icon size in px. The plan's 16-22px band; 18 reads correctly next
